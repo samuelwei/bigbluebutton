@@ -95,11 +95,16 @@ services:
       - BBB_POSTGRES_HASURA_APP_PASSWORD=${BBB_POSTGRES_HASURA_APP_PASSWORD}
       - BBB_POSTGRES_BBB_HASURA_PASSWORD=${BBB_POSTGRES_BBB_HASURA_PASSWORD}
       - HASURA_GRAPHQL_ADMIN_SECRET=${HASURA_GRAPHQL_ADMIN_SECRET}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     depends_on:
-      - postgres
-      - web
-      - apps-akka
-      - graphql-actions
+      postgres:
+        condition: service_healthy
+      web:
+        condition: service_started
+      apps-akka:
+        condition: service_started
+      graphql-actions:
+        condition: service_started
     networks:
       bbb-net:
 
@@ -126,7 +131,7 @@ services:
       - redis
     build:
       args:
-        TAG_BBB_PRESENTATION_VIDEO: "${TAG_BBB_PRESENTATION_VIDEO:-5.0.0}"
+        TAG_BBB_PRESENTATION_VIDEO: "${TAG_BBB_PRESENTATION_VIDEO:-5.1.0-rc.4}"
       tags:
         - "${IMAGE_REPO:-bigbluebutton}/bbb-record-and-playback:local"
     networks:
@@ -237,7 +242,10 @@ services:
       bbb-net:
 
   postgres:
-    image: postgres:16-alpine
+    # Debian-based image (not alpine): BBB init uses LC_COLLATE 'C.UTF-8', which
+    # alpine often lacks. Named volume avoids Docker Desktop bind-mount ownership
+    # failures that abort init mid-way (roles like bbb_core never get created).
+    image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -251,7 +259,7 @@ services:
       timeout: 5s
       retries: 5
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/initdb.sh:/docker-entrypoint-initdb.d/initdb.sh
       - ./bbb-graphql-server/bbb_schema.sql:/bbb-graphql-server/bbb_schema.sql:ro
     networks:
@@ -340,6 +348,9 @@ services:
       - nginx
     networks:
       bbb-net:
+
+volumes:
+  postgres_data:
 
 networks:
   bbb-net:
