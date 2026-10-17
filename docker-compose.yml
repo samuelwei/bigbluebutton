@@ -356,6 +356,8 @@ services:
     volumes:
       - ./conf/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./ssl:/local/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       - nginx
     networks:
@@ -363,6 +365,8 @@ services:
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   bbb-net:
