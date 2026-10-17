@@ -71,6 +71,23 @@ services:
     networks:
       bbb-net:
 
+  shared-notes-server:
+    image: "${IMAGE_REPO:-bigbluebutton}/bbb-shared-notes-server:${IMAGE_SHARED_NOTES_SERVER_TAG:-latest}"
+    build:
+      context: ./bbb-shared-notes-server
+      tags:
+        - "${IMAGE_REPO:-bigbluebutton}/bbb-shared-notes-server:local"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      web:
+        condition: service_started
+    networks:
+      bbb-net:
+
   graphql-middleware:
     image: "${IMAGE_REPO:-bigbluebutton}/bbb-graphql-middleware:${IMAGE_GRAPHQL_MIDDLEWARE_TAG:-latest}"
     build:
@@ -197,6 +214,7 @@ services:
       - graphql-server
       - graphql-middleware
       - livekit
+      - shared-notes-server
     networks:
       bbb-net:
 
@@ -267,6 +285,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/initdb.sh:/docker-entrypoint-initdb.d/initdb.sh
       - ./bbb-graphql-server/bbb_schema.sql:/bbb-graphql-server/bbb_schema.sql:ro
+      - ./bbb-shared-notes-server/blocknote_schema.sql:/bbb-shared-notes-server/blocknote_schema.sql:ro
     networks:
       bbb-net:
 

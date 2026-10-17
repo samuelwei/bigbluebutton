@@ -38,4 +38,11 @@ psql -v ON_ERROR_STOP=1 -q -c "GRANT CONNECT ON DATABASE bbb_graphql TO bbb_hasu
 psql -v ON_ERROR_STOP=1 -q -d bbb_graphql -c "GRANT SELECT ON ALL TABLES IN SCHEMA public TO bbb_hasura"
 psql -v ON_ERROR_STOP=1 -q -d bbb_graphql -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO bbb_hasura"
 
+# blocknote_app@blocknote_app (bbb-shared-notes-server / BlockNote)
+psql -tc "SELECT 1 FROM pg_roles WHERE rolname='blocknote_app'" | grep -q 1 || \
+  psql -v ON_ERROR_STOP=1 -c "CREATE USER blocknote_app WITH PASSWORD 'blocknote_app'"
+psql -v ON_ERROR_STOP=1 -q -c "DROP DATABASE IF EXISTS blocknote_app WITH (FORCE);"
+psql -v ON_ERROR_STOP=1 -q -c "CREATE DATABASE blocknote_app OWNER blocknote_app;"
+psql -v ON_ERROR_STOP=1 -U postgres -d blocknote_app -q -f "/bbb-shared-notes-server/blocknote_schema.sql"
+
 echo "Postgres BBB init complete"
