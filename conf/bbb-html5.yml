@@ -1,3 +1,35 @@
-# Optional client-settings overrides for apps-akka.
-# Empty files are invalid YAML and cause parse errors on startup.
-{}
+# Client settings override for both bbb-web and apps-akka.
+# Mounted at /etc/bigbluebutton/bbb-html5.yml in both containers (see docker-compose.yml).
+# Merged over /usr/share/bigbluebutton/html5-client/private/config/settings.yml.
+# Must be valid YAML (an empty file fails to parse); use {} for no overrides.
+public:
+  app:
+    clientTitle: THM PILOS
+    helpLink: https://thm-health.github.io/PILOS-Docs/
+    defaultSettings:
+      application:
+        overrideLocale: de
+    listenOnlyMode: false
+  whiteboard:
+    styles:
+      fontStyle: sans
+  virtualBackgrounds:
+    enabled: true
+    enableVirtualBackgroundUpload: true
+    storedOnBBB: false
+    showThumbnails: true
+    imagesPath: https://pilos.thm.de/storage/virtual-backgrounds/
+    thumbnailsPath: https://pilos.thm.de/storage/virtual-backgrounds/thumbnails/
+    fileNames:
+      - thm_grey.jpeg
+      - book_shelf.jpeg
+      - minimalistic.jpeg
+      - minimalistic2.jpeg
+      - living_room.jpeg
+      - pictures.jpeg
+      - plants.jpeg
+      - garden.jpeg
+      - mountains.jpeg
+  sharedNotes:
+    importMarkdownEnabled: true
+    exportMarkdownEnabled: true

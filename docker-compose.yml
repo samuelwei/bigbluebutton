@@ -12,6 +12,7 @@ services:
       - SHARED_SECRET=${SHARED_SECRET}
     volumes:
       - ./data/bigbluebutton:/var/bigbluebutton
+      - ./conf/bbb-html5.yml:/etc/bigbluebutton/bbb-html5.yml:ro
     depends_on:
       - redis
       - collabora
