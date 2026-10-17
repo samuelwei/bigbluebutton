@@ -53,6 +53,7 @@ services:
     build:
       tags:
         - "${IMAGE_REPO:-bigbluebutton}/bbb-learning-dashboard:local"
+    restart: unless-stopped
     networks:
       bbb-net:
 
@@ -216,6 +217,7 @@ services:
       - graphql-middleware
       - livekit
       - shared-notes-server
+      - learning-dashboard
     networks:
       bbb-net:
 
