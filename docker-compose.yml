@@ -158,11 +158,13 @@ services:
       bbb-net:
 
   webrtc-sfu:
-    image: "${IMAGE_REPO:-bigbluebutton}/bbb-webrtc-sfu:${IMAGE_WEBRTC_SFU_TAG:-latest}"
+    image: "${IMAGE_REPO:-bigbluebutton}/bbb-webrtc-sfu:${IMAGE_WEBRTC_SFU_TAG:-2.25.0-beta.3}"
     restart: unless-stopped
     environment:
       - LIVEKIT_ENABLED=true
       - LIVEKIT_HOST=http://livekit:7880
+      - LIVEKIT_KEY=${LIVEKIT_KEY}
+      - LIVEKIT_SECRET=${LIVEKIT_SECRET}
       - LIVEKIT_EVENT_SOURCE=agent
       - CLIENT_HOST=0.0.0.0
       - KURENTO=[]
@@ -174,6 +176,9 @@ services:
       - REDIS_HOST=redis
     env_file:
       - .env
+    depends_on:
+      - redis
+      - livekit
     networks:
       bbb-net:
 
@@ -281,16 +286,21 @@ services:
         port: 7880
         log_level: info
         rtc:
+          # Keep in sync with published UDP ports below (Docker Desktop struggles with huge ranges).
           port_range_start: 16384
-          port_range_end: 32768
+          port_range_end: 16484
           use_external_ip: false
-          tcp_port: 0
-          allow_tcp_fallback: false
+          tcp_port: 7881
+          allow_tcp_fallback: true
           interfaces:
             excludes:
               - docker0
         redis:
           address: 'redis:6379'
+        webhook:
+          api_key: '${LIVEKIT_KEY}'
+          urls:
+            - http://webrtc-sfu:3040/livekit-webhook
         audio:
           active_level: 50
           min_percentile: 10
@@ -307,6 +317,8 @@ services:
           enable_remote_unmute: true
     env_file:
       - .env
+    ports:
+      - "16384-16484:16384-16484/udp"
     depends_on:
       - redis
     networks:

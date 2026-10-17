@@ -1,0 +1,3 @@
+# Optional client-settings overrides for apps-akka.
+# Empty files are invalid YAML and cause parse errors on startup.
+{}
