@@ -19,7 +19,6 @@ import Auth from '/imports/ui/services/auth';
 import BBBWeb from '/imports/api/bbb-web-api';
 import MeetingStaticDataStore from '/imports/ui/core/singletons/meetingStaticData';
 import { MeetingStaticData } from '/imports/ui/Types/meetingStaticData';
-
 const connectionTimeout = 60000;
 
 type Meeting = MeetingStaticData & {
@@ -99,7 +98,7 @@ const SettingsLoader: React.FC<SettingsLoaderProps> = (props) => {
             const settings = clientSettings.clientSettingsJson;
             window.meetingClientSettings = JSON.parse(JSON.stringify(settings));
             MeetingStaticDataStore.setMeetingData(staticData);
-            setMeetingSettings(settings);
+            setMeetingSettings(window.meetingClientSettings);
             setLoading(false);
             setSettingsFetched(true);
           })
