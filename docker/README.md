@@ -226,6 +226,27 @@ Configuration:
   self-signed one.
 - Logs: `docker compose logs <service>`; the logs per recording are in the `recording-logs` volume.
 
+HTML5 client hot reload (Vite on the host): overlays live in `docker/dev/`. Keep the stack
+running, start Vite, then enable the overlay so nginx proxies `/html5client` to the host
+instead of the `html5-client` image.
+
+Easiest: uncomment `COMPOSE_FILE` in `.env` (see `.env.sample`), then:
+
+```sh
+cd bigbluebutton-html5 && npm start
+# other terminal:
+docker compose up -d nginx
+```
+
+Or pass the file once:
+
+```sh
+docker compose -f docker-compose.yml -f docker/dev/compose.yml up -d nginx
+```
+
+Join via `https://$BBB_DOMAIN` (not `:3000`). Revert: comment out `COMPOSE_FILE` (or drop the
+extra `-f`), then `docker compose up -d nginx`.
+
 Not covered: office document conversion (bbb-web expects
 `/usr/share/bbb-libreoffice-conversion/convert.sh`, which no image provides yet), FreeSWITCH and
 dial-in, more than one server, Kubernetes, and running behind an existing reverse proxy or TLS

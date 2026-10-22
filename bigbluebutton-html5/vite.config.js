@@ -159,6 +159,7 @@ export default defineConfig(({ command, mode }) => {
       port: 3000,
       strictPort: true,
       host: true,
+      allowedHosts: ['bbb.local'],
       // HMR through nginx TLS front door (see bbb-html5.nginx.dev).
       hmr: {
         protocol: 'wss',

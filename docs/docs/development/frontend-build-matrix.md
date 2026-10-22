@@ -44,7 +44,7 @@ Inventory of JavaScript/TypeScript build tools in the BigBlueButton monorepo and
 
 - Deb: `build/packages-template/bbb-html5/`, `build/packages-template/bbb-learning-dashboard/`
 - Docker: `bigbluebutton-html5/Dockerfile`, `bbb-learning-dashboard/Dockerfile`, `docker-bake.hcl`
-- Dev nginx HMR: `bbb-html5.nginx.dev`; LAD uses `bbb-learning-dashboard/learning-dashboard-dev.nginx` (canonical; `run-dev.sh` installs it)
+- Dev nginx HMR: bare-metal `bbb-html5.nginx.dev`; Docker Compose overlay in `docker/dev/`; LAD uses `bbb-learning-dashboard/learning-dashboard-dev.nginx` (canonical; `run-dev.sh` installs it)
 - CI: `.github/workflows/ts-code-compilation.yml`, `ts-code-validation.yml`, `automated-tests.yml`
 
 ## HTML5 boot

@@ -1,0 +1,20 @@
+# Opt-in HTML5 Vite overlay. Files live under docker/dev/.
+#
+# Enable (either):
+#   COMPOSE_FILE=docker-compose.yml:docker/dev/compose.yml   # in .env, then:
+#   docker compose up -d nginx
+# or:
+#   docker compose -f docker-compose.yml -f docker/dev/compose.yml up -d nginx
+#
+#   cd bigbluebutton-html5 && npm start
+#
+# Revert: unset COMPOSE_FILE (or drop -f docker/dev/compose.yml), then
+#   docker compose up -d nginx
+services:
+  nginx:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./docker/dev/nginx/bbb-html5.nginx:/usr/share/bigbluebutton/nginx/bbb-html5.nginx:ro
+      # Locale JSON autoindex (see nginx/bbb-html5.nginx); keep in sync with host source.
+      - ./bigbluebutton-html5/public/locales:/usr/share/bigbluebutton/html5-client/locales:ro

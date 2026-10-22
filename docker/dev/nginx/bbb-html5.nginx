@@ -1,0 +1,30 @@
+# Vite on the compose host (npm start in bigbluebutton-html5).
+# Mounted by docker/dev/compose.yml over the static html5-client upstream.
+location /html5client/ {
+  proxy_pass http://host.docker.internal:3000;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "Upgrade";
+  proxy_set_header Host $host;
+}
+
+location /html5client/ws {
+  proxy_pass http://host.docker.internal:3000/html5client/ws;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "Upgrade";
+  proxy_set_header Host $host;
+}
+
+# Same as bbb-html5.nginx.dev / .static: JSON directory listing for intlLoader.
+# Host locales are bind-mounted by docker/dev/compose.yml.
+location /html5client/locales {
+  alias /usr/share/bigbluebutton/html5-client/locales;
+
+  autoindex on;
+  autoindex_format json;
+
+  add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+  add_header Pragma "no-cache";
+  add_header Expires 0;
+}
