@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node master.js",
     "lint:fix": "eslint --fix '**/*.js' --ignore-pattern 'node_modules/'",
-    "lint": "eslint '**/*.js' --ignore-pattern 'node_modules/'"
+    "lint": "eslint '**/*.js' --ignore-pattern 'node_modules/'",
+    "oxlint": "oxlint ."
   },
   "dependencies": {
     "@svgdotjs/svg.js": "^3.2.4",
@@ -20,7 +21,8 @@
   },
   "devDependencies": {
     "eslint": "^8.20.0",
-    "eslint-config-google": "^0.14.0"
+    "eslint-config-google": "^0.14.0",
+    "oxlint": "^1.89.0"
   },
   "engines": {
     "node": ">=24.0.0",

@@ -43,29 +43,8 @@ npm -v
 echo "Node version:"
 node -v
 
-CI=true npm ci
-DISABLE_ESLINT_PLUGIN=true npm run build-safari && npm run build
-
-#Rename all safari bundle with same hash of the last bundle
-cd dist
-HASH=$(ls | grep -Eo 'bundle\.[a-f0-9]{20}\.js' | head -n 1 | grep -Eo '[a-f0-9]{20}')
-if [ -z "$HASH" ]; then
-  echo "Bundle hash not found."
-else
-  for FILE in *.safari.js *.safari.js.map; do
-    if [[ "$FILE" == *"$HASH"* ]]; then
-      continue
-    fi
-
-    PREFIX="${FILE%%.safari.js*}"
-    SUFFIX="${FILE#*.safari.js}"  #".js" or ".js.map"
-    NEW_NAME="${PREFIX}.${HASH}.safari.js${SUFFIX}"
-
-    echo "Renaming $FILE → $NEW_NAME"
-    mv "$FILE" "$NEW_NAME"
-  done
-fi
-cd ..
+CI=true npm ci --legacy-peer-deps
+DISABLE_ESLINT_PLUGIN=true npm run build
 
 # replace v=VERSION with build identifier in head and css files
 if [ -f dist/index.html ] || [ -f dist/stylesheets/fonts.css ]; then

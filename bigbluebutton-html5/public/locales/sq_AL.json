@@ -1603,7 +1603,7 @@
     "app.actionsBar.actionsDropdown.stopShareExternalVideo": "Ndal ndarje me të tjerë videoje të jashtme",
     "app.legacy.unsupportedBrowser": "Duket sikur po përdorni një shfletues që s’mbulohet. Ju lutemi, për mbulim të plotë, përdorni një version të freskët ose të {supportedBrowser1}, ose të {supportedBrowser2}.",
     "app.legacy.upgradeBrowser": "Duket sikur po përdorni një version të vjetër të një shfletuesi të mbuluar. Ju lutemi, për mbulim të plotë, përmirësojeni shfletuesin tuaj me një version të freskët.",
-    "app.legacy.unsupportedSafari": "Ju lutemi, për mbulim të plotë, përmirësoni shfletuesin tuaj me Safari 14, ose më të ri.",
+    "app.legacy.unsupportedSafari": "Ju lutemi, për mbulim të plotë, përmirësoni shfletuesin tuaj me Safari 16, ose më të ri.",
     "app.debugWindow.windowTitle": "Diagnostikojeni",
     "app.debugWindow.form.userAgentLabel": "Agjent Përdoruesi",
     "app.debugWindow.form.button.copy": "Kopjoje",

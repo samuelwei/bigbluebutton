@@ -5,7 +5,7 @@
  * reviewed as a set, so the dark theme starts at parity with the engine it replaces.
  * Deliberate departures from that parity carry their reason inline, below.
  *
- * Loaded unconditionally from client/main.html so the palette exists before the
+ * Loaded unconditionally from index.html so the palette exists before the
  * first paint; every rule is scoped to :root[data-theme='dark'] and therefore
  * inert until the boot script (persisted user choice) or the settings service
  * (app/service.js setDarkTheme) sets that attribute. This is the only dark theme

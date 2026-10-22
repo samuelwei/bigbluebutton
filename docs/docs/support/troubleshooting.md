@@ -447,13 +447,11 @@ If the browser is older than the required version, the main client bundle is not
 
 BigBlueButton supports the following browsers and minimum versions:
 
-* Safari — 14 or newer
+* Safari — 16 or newer
 * Chrome — 87 or newer
 * Firefox — 80 or newer
 * Microsoft Edge — 85 or newer
 * MiuiBrowser — not supported
-
-For Safari versions between 14 and 15, a special compatibility bundle is automatically loaded to ensure proper functionality. All other supported browsers use the standard client bundle.
 
 #### Notes
 

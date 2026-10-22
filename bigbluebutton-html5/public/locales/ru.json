@@ -1455,7 +1455,7 @@
     "app.legacy.unsupportedBrowser": "Похоже, вы используете неподдерживаемый браузер. Пожалуйста, используйте последнюю версию {supportedBrowser1} или {supportedBrowser2} для полной поддержки.",
     "app.legacy.upgradeBrowser": "Похоже, вы используете старую версию поддерживаемого браузера. Пожалуйста, обновите браузер до последней версии для полной поддержки.",
     "app.legacy.criosBrowser": "На iOS, пожалуйста, используйте последнюю версию Safari для полной поддержки.",
-    "app.legacy.unsupportedSafari": "Пожалуйста, обновите ваш браузер до Safari 14 или новее для полной поддержки.",
+    "app.legacy.unsupportedSafari": "Пожалуйста, обновите ваш браузер до Safari 16 или новее для полной поддержки.",
     "app.debugWindow.windowTitle": "Отладка",
     "app.debugWindow.form.userAgentLabel": "Пользовательский агент",
     "app.debugWindow.form.button.copy": "Копировать",

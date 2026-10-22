@@ -1264,7 +1264,7 @@
     "app.legacy.unsupportedBrowser": "It looks like you're using a browser that is not supported. Please use a recent version of either {supportedBrowser1} or {supportedBrowser2} for full support.",
     "app.legacy.upgradeBrowser": "It looks like you're using an older version of a supported browser. Please upgrade your browser to a recent version for full support.",
     "app.legacy.criosBrowser": "On iOS please use a recent version of Safari for full support.",
-    "app.legacy.unsupportedSafari": "Please upgrade your browser to Safari 14 or newer for full support.",
+    "app.legacy.unsupportedSafari": "Please upgrade your browser to Safari 16 or newer for full support.",
     "app.debugWindow.windowTitle": "디버그",
     "app.debugWindow.form.userAgentLabel": "사용자 에이전트",
     "app.debugWindow.form.button.copy": "복사",

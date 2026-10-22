@@ -107,7 +107,7 @@ const SetupColumn = styled(Card)`
   }
 `;
 
-// Not a <main>: client/main.html already wraps the client in one.
+// Not a <main>: index.html already wraps the client in one.
 // Two equal rows around the stack keep it centred on the card whatever the
 // top slot holds; a tall slot grows both rows rather than overlapping it.
 const ContentColumn = styled(Card)`
