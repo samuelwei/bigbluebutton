@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<!--
+BigBlueButton open source conferencing system - http://www.bigbluebutton.org/
+
+Copyright (c) 2019 BigBlueButton Inc. and by respective authors (see below).
+
+This program is free software; you can redistribute it and/or modify it under the
+terms of the GNU Lesser General Public License as published by the Free Software
+Foundation; either version 3.0 of the License, or (at your option) any later
+version.
+
+BigBlueButton is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public License along
+with BigBlueButton; if not, see <http://www.gnu.org/licenses/>.
+-->
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta charset="utf-8">
+  <!-- Block browser auto-translation: translators (e.g. Google Translate) rewrite
+       text nodes out from under React, desyncing the virtual DOM and crashing the
+       client (insertBefore NotFoundError) on the next render. Use in-app i18n. -->
+  <meta name="google" content="notranslate">
+  <script>document.documentElement.setAttribute('translate', 'no');</script>
+  <title>BigBlueButton</title>
+  <link rel="stylesheet" href="stylesheets/normalize.css" crossorigin="anonymous"/>
+  <style>
+    html {
+      box-sizing: border-box;
+    }
+
+    *, *:before, *:after {
+      box-sizing: inherit;
+    }
+
+    body {
+      position: fixed;
+      height: 100%;
+      font-family: 'Source Sans Pro', Arial, sans-serif;
+      font-size: 1rem; /* 16px */
+      background-color: var(--color-background);
+    }
+
+    /* language-specific font */
+    body.lang-fa {
+      font-family: Tahoma, 'Source Sans Pro', Arial, sans-serif;
+    }
+
+    :-webkit-full-screen {
+      background-color: inherit;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    #app {
+      height: 100%;
+      width: 100vw;
+      overflow: hidden;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      border: 0;
+    }
+
+    .set-z-index {
+      z-index: 15;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    .remove-z-index {
+      z-index: 0;
+    }
+    /* .full-screen {
+      height: 100% !important;
+      width: 100% !important;
+      transform: translateX(0) translateY(0) translateZ(0) !important;
+    } */
+
+    [hidden]:not([hidden="false"]) {
+      display: none !important;
+    }
+
+    ::-webkit-input-placeholder {
+      color: var(--palette-placeholder-text);
+      opacity: 1;
+    }
+
+    :-moz-placeholder, /* Firefox 4 to 18 */
+    ::-moz-placeholder { /* Firefox 19+ */
+      color: var(--palette-placeholder-text);
+      opacity: 1;
+    }
+
+    main {
+      display: initial;
+    }
+
+    .overrideSelect {
+      background-color: #FFF !important;
+      color: #000 !important;
+    }
+
+    .select {
+      background-color: rgba(66, 133, 244, 1) !important;
+      color: #FFF !important;
+    }
+
+    .fade-in {
+      opacity: 1 !important;
+    }
+
+    .fade-out {
+      opacity: 0 !important;
+    }
+
+    .browserWarning {
+      border: 5px solid #F3F6F9;
+      border-radius: 0.5rem;
+      color: #F3F6F9;
+      text-align: center;
+      width: 500px;
+      position: fixed;
+      left: 50%;
+      margin-left: -250px;
+      top: 50%;
+      margin-top: -4rem;
+      font-size: 1.5rem;
+      padding: 10px;
+      font-family: 'Source Sans Pro', Arial, sans-serif;
+    }
+
+    @media only screen and (max-width: 40em) {
+      .browserWarning {
+        width: 95%;
+        left: 2.5%;
+        margin-left: 0;
+      }
+    }
+  </style>
+  <script>
+    document.addEventListener('gesturestart', function (e) {
+      e.preventDefault();
+    });
+    document.addEventListener('gesturechange', function (e) {
+      e.preventDefault();
+    });
+  </script>
+  <script src="compatibility/tflite-simd.js?v=VERSION" language="javascript"></script>
+  <script src="compatibility/tflite.js?v=VERSION" language="javascript"></script>
+  <!-- fonts -->
+  <link rel="preload" href="fonts/BbbIcons/bbb-icons.woff2?v=VERSION" as="font" type="font/woff2" crossorigin="anonymous"/>
+  <link rel="preload" href="fonts/SourceSansPro/SourceSansPro-Light.woff?v=VERSION" as="font" crossorigin="anonymous"/>
+  <link rel="preload" href="fonts/SourceSansPro/SourceSansPro-Regular.woff?v=VERSION" as="font" crossorigin="anonymous"/>
+  <link rel="preload" href="fonts/SourceSansPro/SourceSansPro-Semibold.woff?v=VERSION" as="font" crossorigin="anonymous"/>
+  <link rel="preload" href="fonts/SourceSansPro/SourceSansPro-Bold.woff?v=VERSION" as="font" crossorigin="anonymous"/>
+  <link rel="preload" href="fonts/SourceSansPro/SourceSansPro-LightItalic.woff?v=VERSION" as="font" crossorigin="anonymous"/>
+  <link rel="preload" href="fonts/SourceSansPro/SourceSansPro-Italic.woff?v=VERSION" as="font" crossorigin="anonymous"/>
+  <link rel="preload" href="fonts/SourceSansPro/SourceSansPro-SemiboldItalic.woff?v=VERSION" as="font" crossorigin="anonymous"/>
+  <link rel="preload" href="fonts/SourceSansPro/SourceSansPro-BoldItalic.woff?v=VERSION" as="font" crossorigin="anonymous"/>
+  
+  <link rel="stylesheet" href="stylesheets/bbb-icons.css" crossorigin="anonymous"/>
+  <link rel="stylesheet" href="stylesheets/fonts.css" crossorigin="anonymous"/>
+  <link rel="stylesheet" href="stylesheets/fontSizing.css" crossorigin="anonymous"/>
+  <link rel="stylesheet" href="stylesheets/modals.css" crossorigin="anonymous"/>
+  <link rel="stylesheet" href="stylesheets/toastify.css" crossorigin="anonymous"/>
+  <link rel="stylesheet" href="stylesheets/toggleSwitch.css" crossorigin="anonymous"/>
+  
+  <style>
+    @font-face {
+      font-family: 'bbb-icons';
+      src: url('fonts/BbbIcons/bbb-icons.woff2?v=VERSION') format('woff2'),
+      url('fonts/BbbIcons/bbb-icons.woff?v=VERSION') format('woff');
+      font-weight: normal;
+      font-style: normal;
+    }
+    </style>
+  <!-- fonts -->
+</head>
+<body style="background-color: #102133">
+  <div id="aria-polite-alert" aria-live="polite" aria-atomic="false" class="sr-only"></div>
+  <svg style="display: none; width: 1px; height: 1px;">
+    <defs>
+      <g id="redPointer">
+        <circle cx="0" cy="0" r="60" fill="red" />
+      </g>
+    </defs>
+  </svg>
+  <main>
+    <div id="app" role="document"></div>
+  </main>
+  <!--
+    Classic boot owns the browser gate and loads the client module.
+    BBB_ENTRY_URL: dev → /html5client/client/main.tsx (transformIndexHtml);
+    prod → ./bundle.[hash].js (emit-html plugin); Safari 14/15 load
+    ./bundle.[hash].safari.js (unminified twin). No Vite module tag here —
+    that avoids strip/reinject and stays thin-client-boot compatible.
+  -->
+  <script>window.__BBB_ENTRY__ = '__BBB_ENTRY_URL__';</script>
+  <script src="boot.js"></script>
+  <span id="destination"></span>
+  <audio id="remote-media"></audio>
+  <audio id="local-media"></audio>
+  <div id="modals-container"></div>
+  <div id="polling-container"></div>
+</body>
