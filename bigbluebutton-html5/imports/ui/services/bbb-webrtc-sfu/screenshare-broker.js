@@ -254,6 +254,8 @@ class ScreenshareBroker extends BaseBroker {
   subscribeToScreenStream() {
     return new Promise((resolve, reject) => {
       try {
+        // Viewers are not stamped with webRtcCallType. Native routing is
+        // publish-only; playback uses the WebView peer.
         const options = {
           mediaConstraints: {
             audio: !!this.hasAudio,

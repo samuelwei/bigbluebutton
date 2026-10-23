@@ -9,23 +9,31 @@ const promisesHolder = {};
  * Side-effect-free to import: does not patch WebRTC.
  */
 export function callNativeMethod(method, args = []) {
-  try {
-    sequenceHolder.sequence += 1;
-    const { sequence } = sequenceHolder;
+  const webView = window.ReactNativeWebView;
+  if (!webView || typeof webView.postMessage !== 'function') {
+    const error = new Error(`ReactNativeWebView is not available for ${method}`);
+    logger.error(error.message, error);
+    return Promise.reject(error);
+  }
 
-    return new Promise((resolve, reject) => {
-      promisesHolder[sequence] = { resolve, reject };
+  sequenceHolder.sequence += 1;
+  const { sequence } = sequenceHolder;
 
-      window.ReactNativeWebView.postMessage(JSON.stringify({
+  return new Promise((resolve, reject) => {
+    promisesHolder[sequence] = { resolve, reject };
+
+    try {
+      webView.postMessage(JSON.stringify({
         sequence,
         method,
         arguments: args,
       }));
-    });
-  } catch (e) {
-    logger.error(`Error on callNativeMethod ${e.message}`, e);
-    return undefined;
-  }
+    } catch (error) {
+      delete promisesHolder[sequence];
+      logger.error(`Error on callNativeMethod ${error.message}`, error);
+      reject(error);
+    }
+  });
 }
 
 /**

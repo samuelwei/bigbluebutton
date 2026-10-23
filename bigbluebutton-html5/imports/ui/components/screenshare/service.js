@@ -9,6 +9,7 @@ import AudioService from '/imports/ui/components/audio/service';
 import MediaStreamUtils from '/imports/utils/media-stream-utils';
 import browserInfo from '/imports/utils/browserInfo';
 import onScreenshareStopRequest from '/imports/ui/services/mobile-app/screenshare-stop';
+import { setScreenshareBridgeName } from '/imports/ui/services/mobile-app/screenshare-route';
 import { SCREENSHARE_SUBSCRIPTION } from './queries';
 import useDeduplicatedSubscription from '../../core/hooks/useDeduplicatedSubscription';
 import useMeeting from '../../core/hooks/useMeeting';
@@ -17,6 +18,7 @@ import { liveKitScreenshareHasAudioVar } from './livekit-screenshare-state';
 let screenShareBridge = liveKitScreenShareBridge;
 
 export const setBridge = (bridgeName) => {
+  let meetingBridgeName = bridgeName;
   switch (bridgeName) {
     case 'bbb-webrtc-sfu':
       screenShareBridge = sfuScreenShareBridge;
@@ -32,9 +34,11 @@ export const setBridge = (bridgeName) => {
         },
       }, `Unknown screenshare bridge: ${bridgeName}`);
       // Hardcoded default is livekit
+      meetingBridgeName = 'livekit';
       screenShareBridge = liveKitScreenShareBridge;
       break;
   }
+  setScreenshareBridgeName(meetingBridgeName);
 
   logger.debug({
     logCode: 'screenshare_bridge_set',

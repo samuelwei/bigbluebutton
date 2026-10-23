@@ -82,6 +82,12 @@ class AudioBroker extends BaseBroker {
   _join() {
     return new Promise((resolve, reject) => {
       try {
+        // The tablet shell only offers (createFullAudioOffer / setFullAudioRemoteSDP).
+        // Listen-only and other answerers stay on WebView WebRTC so createAnswer
+        // runs on the same peer that received the remote offer.
+        const useNativeFullAudio = this.offering && (
+          this.role === 'sendrecv' || this.role === 'send' || this.role === 'sendonly'
+        );
         const options = {
           audioStream: this.stream,
           mediaConstraints: {
@@ -96,8 +102,7 @@ class AudioBroker extends BaseBroker {
           networkPriorities: this.networkPriority ? { audio: this.networkPriority } : undefined,
           mediaStreamFactory: this.mediaStreamFactory,
           gatheringTimeout: this.gatheringTimeout,
-          // Tablet WebView: stamp full-audio routing in WebRtcPeer.start().
-          webRtcCallType: WEBRTC_CALL_TYPE_FULL_AUDIO,
+          ...(useNativeFullAudio ? { webRtcCallType: WEBRTC_CALL_TYPE_FULL_AUDIO } : {}),
         };
 
         const peerRole = BaseBroker.getPeerRole(this.role);
