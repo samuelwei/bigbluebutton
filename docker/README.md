@@ -164,10 +164,13 @@ What happens on the first start:
 - `init` creates the directories under `./data` that the packages create on install, and the
   databases and roles, as the packages' after-install scripts do. It runs again on every `up`,
   and recreates the databases only when the schemas in the images changed.
-- `certbot` gets a Let's Encrypt certificate through nginx on port 80 and checks twice a day
-  whether it is due for renewal. It writes the certificate for haproxy and reloads haproxy
-  through haproxy's master socket. Until the first certificate is issued, haproxy serves a
-  self-signed one.
+- `certbot` writes the certificate for haproxy and reloads haproxy through haproxy's master
+  socket. Prefer your own certificate: put the chain and key next to `docker-compose.yml` as
+  `certs/fullchain.pem` and `certs/privkey.pem` (same names as bbb-install's `/local/certs/`).
+  Without those files, it gets a Let's Encrypt certificate through nginx on port 80 when
+  `ACME_EMAIL` is set and checks twice a day whether it is due for renewal. Until a real
+  certificate is available, or when `ACME_EMAIL` is empty and no files are in `certs/`,
+  haproxy serves a generated self-signed one.
 - haproxy terminates TLS on 443. HTTP goes to nginx; TURN goes to coturn. TURN is recognised by
   the ALPN `stun.turn`, or, without ALPN, by a first byte that is not a letter.
 
@@ -185,7 +188,8 @@ Data, in `./data` next to `docker-compose.yml`:
 
 - `bigbluebutton`: `/var/bigbluebutton` (presentations, recordings, learning dashboard data);
 - `recordings`: `/var/lib/bbb-webrtc-recorder` (raw media until a recording is processed);
-- `letsencrypt`: `/etc/letsencrypt` (certificate and ACME account).
+- `letsencrypt`: `/etc/letsencrypt` (certificate bundle for haproxy and ACME account);
+- `certs/` (optional): `fullchain.pem` and `privkey.pem` to use instead of Let's Encrypt.
 
 Backup: `./data` and `.env`. PostgreSQL (a volume) holds only the state of running meetings, and
 `init` recreates its databases, so it is not part of a backup. `docker compose down -v` removes

@@ -48,6 +48,8 @@ services:
       certbot:
         condition: service_healthy
 
+  # TLS material for haproxy: optional ./certs/fullchain.pem and ./certs/privkey.pem,
+  # else Let's Encrypt when ACME_EMAIL is set, else a generated self-signed certificate
   certbot:
     <<: *bbb
     image: docker.io/certbot/certbot:v5.8.0@sha256:f70ad0adbb7e117f0fe42a63c553f28ea451edabc0148757b6efcd9735acaa20
@@ -57,9 +59,10 @@ services:
     init: true
     environment:
       BBB_DOMAIN: "${BBB_DOMAIN:?}"
-      ACME_EMAIL: "${ACME_EMAIL:?}"
+      ACME_EMAIL: "${ACME_EMAIL:-}"
     volumes:
       - ./docker/compose/certbot.sh:/usr/local/bin/bbb-certbot:ro
+      - ./certs:/certs:ro,z
       - ./data/letsencrypt:/etc/letsencrypt:z
       - acme-challenge:/var/www/bigbluebutton-default/assets/.well-known/acme-challenge
       - haproxy-run:/var/lib/haproxy
