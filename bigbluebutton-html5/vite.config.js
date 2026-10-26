@@ -159,13 +159,22 @@ export default defineConfig(({ command, mode }) => {
       port: 3000,
       strictPort: true,
       host: true,
-      allowedHosts: ['bbb.local'],
+      // BBB_DOMAIN is the TLS front-door hostname (repo-root .env / compose).
+      allowedHosts: [process.env.BBB_DOMAIN].filter(Boolean),
+      // HMR remounts LiveKitCameraBridge and tears down in-flight camera publishes
+      // (Cancelled publication / empty <video>). Disable with DISABLE_HMR=1 or HOT_RELOAD=false.
       // HMR through nginx TLS front door (see bbb-html5.nginx.dev).
-      hmr: {
-        protocol: 'wss',
-        clientPort: Number(process.env.HMR_CLIENT_PORT) || 443,
-        path: '/html5client/ws',
-      },
+      hmr: (
+        process.env.DISABLE_HMR === '1'
+        || process.env.DISABLE_HMR === 'true'
+        || process.env.HOT_RELOAD === 'false'
+      )
+        ? false
+        : {
+          protocol: 'wss',
+          clientPort: Number(process.env.HMR_CLIENT_PORT) || 443,
+          path: '/html5client/ws',
+        },
       watch: {
         ignored: ['**/node_modules/**', '**/.yalc/**'],
       },

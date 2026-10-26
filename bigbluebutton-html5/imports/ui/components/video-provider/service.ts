@@ -200,6 +200,14 @@ class VideoService {
     return `${this.getPrefix()}${TOKEN}${deviceId}`;
   }
 
+  getDeviceIdFromStreamName(streamName: string) {
+    const prefixWithToken = `${this.getPrefix()}${TOKEN}`;
+    if (typeof streamName !== 'string' || !streamName.startsWith(prefixWithToken)) {
+      return null;
+    }
+    return streamName.substring(prefixWithToken.length) || null;
+  }
+
   static getMediaServerAdapter() {
     const { videoMediaServer } = window.meetingClientSettings.public.kurento;
     return videoMediaServer;
@@ -461,9 +469,16 @@ class VideoService {
     return finalThreshold;
   }
 
-  getPreloadedStream() {
-    if (this.deviceId == null) return null;
-    return VideoPreviewService.getStream(this.deviceId);
+  setDeviceId(deviceId: string | null) {
+    this.deviceId = deviceId;
+  }
+
+  getPreloadedStream(deviceId: string | null = null) {
+    // Prefer an explicit id (e.g. parsed from the stream name). stopConnectingStream
+    // clears this.deviceId on publish failure, so retries must not rely on it alone.
+    const id = deviceId || this.deviceId;
+    if (id == null) return null;
+    return VideoPreviewService.getStream(id);
   }
 
   updatePeerDictionaryReference(newRef: Record<string, WebRtcPeer>) {
@@ -623,7 +638,9 @@ export default {
   storeDeviceIds: videoService.storeDeviceIds.bind(videoService),
   joinedVideo: () => VideoService.joinedVideo(),
   exitedVideo: () => videoService.exitedVideo(),
-  getPreloadedStream: () => videoService.getPreloadedStream(),
+  getPreloadedStream: (deviceId?: string | null) => videoService.getPreloadedStream(deviceId),
+  getDeviceIdFromStreamName: (streamName: string) => videoService.getDeviceIdFromStreamName(streamName),
+  setDeviceId: (deviceId: string | null) => videoService.setDeviceId(deviceId),
   getRecord: () => videoService.getRecord(),
   getPageChangeDebounceTime: () => VideoService.getPageChangeDebounceTime(),
   getUserParameterProfile: () => videoService.getUserParameterProfile(),

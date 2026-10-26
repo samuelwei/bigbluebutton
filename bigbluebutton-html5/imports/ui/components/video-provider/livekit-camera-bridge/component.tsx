@@ -19,6 +19,7 @@ import {
 import { useConnectionState, useTracks } from '@livekit/components-react';
 import { debounce } from '/imports/utils/debounce';
 import VideoService from '/imports/ui/components/video-provider/service';
+import PreviewService from '/imports/ui/components/video-preview/service';
 import { getCameraPublishOptions } from './service';
 import VideoListContainer from '/imports/ui/components/video-provider/video-list/container';
 import logger from '/imports/startup/client/logger';
@@ -37,6 +38,11 @@ import {
   expectStreamStop,
   consumeExpectedStreamStop,
 } from '/imports/ui/components/video-provider/state';
+
+// Survive React remounts (Strict Mode / HMR / GraphQL flaps). Instance refs alone
+// allow two startStream calls to publishTrack the same MediaStreamTrack → Cancelled.
+const publishingStreamIds = new Set<string>();
+const publishedLocalTracks: Record<string, LocalTrack> = {};
 
 const intlClientErrors = defineMessages({
   permissionError: {
@@ -153,8 +159,17 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
 
   // Streams whose failures were already surfaced to the end user. Avoids trailing toasts.
   const announcedFailures = useRef(new Set<string>());
+  // Intentional / in-progress teardowns — MediaStream.stop() fires `inactive`, which
+  // must not be treated as a user-facing unexpected camera failure.
+  const tearingDownStreams = useRef(new Set<string>());
+  // Transient publish retries per stream id (Cancelled / TrackInvalid / reconnect).
+  const publishRetryCounts = useRef(new Map<string, number>());
+  const MAX_PUBLISH_RETRIES = 3;
 
   const handleStreamFailure = useCallback((error: Error, stream: string, isLocal: boolean) => {
+    // destroyStream / intentional unshare already owns this camera
+    if (tearingDownStreams.current.has(stream)) return;
+
     const { name: errorName, message: errorMessage } = error;
     const errorLocale = intlClientErrors[errorName as keyof typeof intlClientErrors]
       || intlClientErrors[errorMessage as keyof typeof intlClientErrors]
@@ -190,6 +205,8 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
     const isLocal = VideoService.isLocalStream(stream);
 
     if (track == null || !isLocal) return;
+    // Intentional unshare stops the MediaStream → `inactive`. That is not a failure.
+    if (tearingDownStreams.current.has(stream)) return;
 
     handleStreamFailure(
       new Error('inactiveError'),
@@ -228,76 +245,129 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
     }
   };
 
+  const unpublishLocalCameraByStream = async (stream: string) => {
+    const localRoom = liveKitRoomRegistry.getPrimary();
+    if (!localRoom) return;
+
+    const tracked = bridgeRefs.current.localTracks[stream];
+    const unpublishJobs: Promise<void>[] = [];
+
+    localRoom.localParticipant.videoTrackPublications.forEach((pub: LocalTrackPublication) => {
+      if (!lkIsCameraSource(pub) || !pub.track) return;
+
+      // Match by stream name / LiveKit sid only — matching MediaStreamTrack.id would
+      // cancel an in-flight republish of the same camera capture.
+      const matchesName = pub.trackName === stream;
+      const matchesSid = !!tracked && tracked.sid === pub.track.sid;
+
+      if (!matchesName && !matchesSid) return;
+
+      unpublishJobs.push(
+        localRoom.localParticipant.unpublishTrack(pub.track)
+          .then(() => {
+            logger.debug({
+              logCode: 'livekit_camera_unpublished',
+              extraInfo: {
+                cameraId: stream,
+                trackName: pub.trackName,
+                trackSid: pub?.trackSid,
+              },
+            }, `LiveKit: camera unpublished - ${pub.trackSid}`);
+          })
+          .catch((error) => {
+            logger.error({
+              logCode: 'livekit_camera_unpublish_error',
+              extraInfo: {
+                cameraId: stream,
+                trackName: pub.trackName,
+                trackSid: pub.trackSid,
+                errorMessage: error.message,
+                errorStack: error.stack,
+              },
+            }, `LiveKit: failed to unpublish track: ${error.message}`);
+          })
+          .finally(() => {
+            bridgeRefs.current.publications.delete(pub.trackName);
+          }),
+      );
+    });
+
+    await Promise.all(unpublishJobs);
+  };
+
   const destroyStream = (stream: string) => {
     const localStream = bridgeRefs.current.localVideoStreams[stream];
     const publication = bridgeRefs.current.publications.get(stream);
     const isLocal = VideoService.isLocalStream(stream);
+    const wasPublished = !!bridgeRefs.current.localTracks[stream];
+    const wasConnecting = !!bridgeRefs.current.connectingStreams[stream];
 
-    if (localStream) {
-      if (typeof localStream.inactivationHandler === 'function') {
-        localStream.removeListener('inactive', localStream.inactivationHandler);
-      }
+    tearingDownStreams.current.add(stream);
 
-      localStream.stop();
-    }
-
-    if (isLocal) {
-      const wasPublished = !!bridgeRefs.current.localTracks[stream];
-      const alreadyAnnounced = announcedFailures.current.delete(stream);
-
-      // Bubble up the unexpect camera stop to the end user
-      if (wasPublished && !alreadyAnnounced && !consumeExpectedStreamStop(stream)) {
-        logger.warn({
-          logCode: 'livekit_camera_stopped_unexpectedly',
-          extraInfo: { cameraId: stream },
-        }, 'LiveKit: camera stopped without the user asking');
-        notify(
-          intl.formatMessage(intlClientErrors.mediaTimedOutError),
-          'error',
-          'video',
-          { autoClose: false, toastId: CAMERA_STOPPED_TOAST_ID },
-        );
-      }
-
-      const track = bridgeRefs.current.localTracks[stream];
-      const localRoom = liveKitRoomRegistry.getPrimary();
-      const { videoTrackPublications } = localRoom?.localParticipant ?? {};
-
-      if (!videoTrackPublications || !track || !localRoom) return;
-
-      videoTrackPublications.forEach((publication: LocalTrackPublication) => {
-        if (lkIsCameraSource(publication) && publication.track && track.sid === publication.track.sid) {
-          localRoom.localParticipant.unpublishTrack(publication.track)
-            .then(() => {
-              logger.debug({
-                logCode: 'livekit_camera_unpublished',
-                extraInfo: {
-                  cameraId: stream,
-                  trackName: publication.trackName,
-                  trackSid: publication?.trackSid,
-                },
-              }, `LiveKit: camera unpublished - ${publication.trackSid}`);
-            })
-            .catch((error) => {
-              logger.error({
-                logCode: 'livekit_camera_unpublish_error',
-                extraInfo: {
-                  cameraId: stream,
-                  trackName: publication.trackName,
-                  trackSid: publication.trackSid,
-                  errorMessage: error.message,
-                  errorStack: error.stack,
-                },
-              }, `LiveKit: failed to unpublish track: ${error.message}`);
-            }).finally(() => {
-              bridgeRefs.current.publications.delete(publication.trackName);
-            });
+    try {
+      if (localStream) {
+        if (typeof localStream.inactivationHandler === 'function') {
+          localStream.removeListener('inactive', localStream.inactivationHandler);
         }
-      });
-      delete bridgeRefs.current.localTracks[stream];
-      delete bridgeRefs.current.localVideoStreams[stream];
-    } else if (publication) {
-      unsubscribeFromRemotePub(stream, publication as RemoteTrackPublication);
+        // `once('inactive', …)` wraps the handler — removeListener alone can miss it.
+        // Clear before stop() so intentional unshare does not surface inactiveError.
+        if (typeof localStream.removeAllListeners === 'function') {
+          localStream.removeAllListeners('inactive');
+        }
+
+        // Publish failures / in-flight teardown run destroyStream before localTracks is
+        // set. Stopping the preloaded BBBVideoStream empties VIDEO_STREAM_STORAGE and
+        // leaves retries with "no preloaded camera stream to publish".
+        if (wasPublished) {
+          localStream.stop();
+        }
+      }
+
+      if (isLocal) {
+        const alreadyAnnounced = announcedFailures.current.delete(stream);
+        const wasExpected = consumeExpectedStreamStop(stream);
+        // Intentional unshare removes the stream from the GraphQL list first, then
+        // updateStreams → destroyStream. By then expectStreamStop may already have
+        // been consumed by a parallel teardown — "still in streamsRef" is the
+        // reliable signal that this stop was unexpected (media died while wanted).
+        const stillWanted = streamsRef.current.some((item) => item.stream === stream);
+
+        if (wasPublished && !wasConnecting && !alreadyAnnounced && !wasExpected && stillWanted) {
+          logger.warn({
+            logCode: 'livekit_camera_stopped_unexpectedly',
+            extraInfo: { cameraId: stream },
+          }, 'LiveKit: camera stopped without the user asking');
+          notify(
+            intl.formatMessage(intlClientErrors.mediaTimedOutError),
+            'error',
+            'video',
+            { autoClose: false, toastId: CAMERA_STOPPED_TOAST_ID },
+          );
+        }
+
+        // Never unpublish while publishTrack may still be in flight. Doing so cancels
+        // pendingTrackResolvers ("Cancelled publication" / "missing track resolver").
+        // A second destroyStream after the connecting flag was cleared used to fall
+        // through and unpublish mid-publish — keep all !wasPublished paths here.
+        // Keep localVideoStreams so a still-wanted publish can attach to <video>.
+        if (!wasPublished) {
+          bridgeRefs.current.connectingStreams[stream] = false;
+          delete bridgeRefs.current.connectingStreams[stream];
+          return;
+        }
+
+        void unpublishLocalCameraByStream(stream);
+
+        delete bridgeRefs.current.localTracks[stream];
+        delete publishedLocalTracks[stream];
+        publishingStreamIds.delete(stream);
+        delete bridgeRefs.current.localVideoStreams[stream];
+        delete bridgeRefs.current.connectingStreams[stream];
+      } else if (publication) {
+        unsubscribeFromRemotePub(stream, publication as RemoteTrackPublication);
+      }
+    } finally {
+      tearingDownStreams.current.delete(stream);
     }
   };
 
@@ -309,10 +379,22 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
 
     if (isLocal) {
       const localStream = bridgeRefs.current.localVideoStreams[stream];
+      const localTrack = bridgeRefs.current.localTracks[stream]
+        ?? publishedLocalTracks[stream];
 
-      if (localStream?.mediaStream) {
+      // Prefer the BBB preview MediaStream; after remount / spurious destroyStream
+      // localVideoStreams may be gone while the LiveKit LocalTrack is still live.
+      if (localStream?.mediaStream?.active) {
         videoElement.pause();
         videoElement.srcObject = localStream.mediaStream;
+        videoElement.load();
+        notifyStreamStateChange(stream, 'completed');
+      } else if (localTrack?.attach) {
+        localTrack.attach(videoElement);
+        notifyStreamStateChange(stream, 'completed');
+      } else if (localTrack?.mediaStreamTrack) {
+        videoElement.pause();
+        videoElement.srcObject = new MediaStream([localTrack.mediaStreamTrack]);
         videoElement.load();
         notifyStreamStateChange(stream, 'completed');
       }
@@ -369,15 +451,53 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
       return;
     }
 
+    // Remount-safe: another instance already published or is publishing this camera.
+    if (publishedLocalTracks[stream]) {
+      bridgeRefs.current.localTracks[stream] = publishedLocalTracks[stream];
+      const deviceId = VideoService.getDeviceIdFromStreamName(stream);
+      const stored = deviceId ? PreviewService.getStream(deviceId) : null;
+      if (stored) bridgeRefs.current.localVideoStreams[stream] = stored;
+      attachLiveKitStream(stream);
+      notifyStreamStateChange(stream, 'completed');
+      playStart(stream);
+      return;
+    }
+    if (publishingStreamIds.has(stream)) return;
+
     bridgeRefs.current.connectingStreams[stream] = true;
+    publishingStreamIds.add(stream);
 
     try {
-      const localBBBStream = VideoService.getPreloadedStream();
+      const deviceId = VideoService.getDeviceIdFromStreamName(stream);
+      // stopConnectingStream clears VideoService.deviceId on publish failure; resolve
+      // the stored preview from the stream name so retries still find it.
+      if (deviceId) VideoService.setDeviceId(deviceId);
 
-      if (!localBBBStream) throw new Error('LiveKit: no preloaded camera stream to publish');
+      let localBBBStream = VideoService.getPreloadedStream(deviceId);
+      let mediaStream = localBBBStream?.mediaStream;
+      let videoTracks = mediaStream?.getVideoTracks().filter((t) => t.readyState === 'live') ?? [];
+
+      // Preview handoff can be missing after a failed/cancelled publish cleared
+      // VIDEO_STREAM_STORAGE. Acquire a fresh capture so share can still proceed.
+      if (!deviceId) throw new Error('LiveKit: cannot resolve deviceId for camera stream');
+      if (!localBBBStream || videoTracks.length === 0) {
+        logger.warn({
+          logCode: 'livekit_camera_preload_missing',
+          extraInfo: { cameraId: stream, deviceId, hadStream: !!localBBBStream },
+        }, 'LiveKit: no usable preloaded camera stream, acquiring via getUserMedia');
+        const profile = VideoService.getCameraProfile();
+        localBBBStream = await PreviewService.doGUM(deviceId, profile);
+        PreviewService.storeStream(deviceId, localBBBStream);
+        mediaStream = localBBBStream.mediaStream;
+        videoTracks = mediaStream?.getVideoTracks().filter((t) => t.readyState === 'live') ?? [];
+      }
+
+      if (!localBBBStream || !mediaStream || videoTracks.length === 0) {
+        throw new Error('LiveKit: no live video track to publish');
+      }
 
       bridgeRefs.current.localVideoStreams[stream] = localBBBStream;
-      const { mediaStream } = localBBBStream;
+
       const LIVEKIT_SETTINGS = meetingSettings.public.media.livekit?.camera;
       const basePubOptions = {
         dtx: true,
@@ -396,34 +516,106 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
 
       if (!publishRoom) throw new Error('LiveKit room not available');
 
-      const publishers: Promise<LocalTrackPublication>[] = mediaStream
-        .getTracks()
-        .map((track: MediaStreamTrack) => {
-          return publishRoom.localParticipant.publishTrack(track, publishOptions).then((publication) => {
-            if (!publication || !publication.track) {
-              throw new Error('Failed to publish track: publication or track is missing');
-            }
+      if (publishRoom.state !== ConnectionState.Connected) {
+        throw new Error('LiveKit: room not connected');
+      }
 
-            logger.debug({
-              logCode: 'livekit_camera_published',
-              extraInfo: {
-                cameraId: stream,
-                trackName: publication?.trackName,
-                trackSid: publication?.trackSid,
-              },
-            }, `LiveKit: camera published - ${publication?.trackSid}`);
-            return publication;
-          });
+      // Guard: destroyed while we prepared
+      if (!bridgeRefs.current.connectingStreams[stream]) {
+        publishingStreamIds.delete(stream);
+        return;
+      }
+
+      const [track] = videoTracks;
+
+      const findExistingLocalPub = (): LocalTrackPublication | undefined => {
+        let found: LocalTrackPublication | undefined;
+        publishRoom.localParticipant.videoTrackPublications.forEach((pub) => {
+          if (found || !lkIsCameraSource(pub) || !pub.track) return;
+          const sameName = pub.trackName === stream;
+          const sameMediaTrack = pub.track.mediaStreamTrack?.id === track.id;
+          if (sameName || sameMediaTrack) found = pub;
         });
+        return found;
+      };
 
-      const trackPublications = await Promise.all(publishers);
-      const [publication] = trackPublications;
+      // A prior attempt may have landed on the SFU while the client saw Cancelled /
+      // missing track resolver. Reuse that publication instead of republishing.
+      let publication = findExistingLocalPub();
+
+      if (!publication) {
+        try {
+          publication = await publishRoom.localParticipant.publishTrack(track, publishOptions);
+        } catch (error) {
+          const err = error as Error;
+          const alreadyPublished = err?.name === 'TrackInvalidError'
+            || err?.message?.includes('same ID has already been published');
+
+          if (!alreadyPublished) throw error;
+
+          publication = findExistingLocalPub();
+          if (!publication) {
+            // Clear by MediaStreamTrack — name-based unpublish misses orphan pubs
+            // left after Cancelled / missing track resolver.
+            try {
+              await publishRoom.localParticipant.unpublishTrack(track);
+            } catch (unpubErr) {
+              logger.debug({
+                logCode: 'livekit_camera_unpublish_stale_track',
+                extraInfo: {
+                  cameraId: stream,
+                  errorMessage: (unpubErr as Error).message,
+                },
+              }, 'LiveKit: stale track unpublish before retry');
+            }
+            await unpublishLocalCameraByStream(stream);
+            if (!bridgeRefs.current.connectingStreams[stream]) throw error;
+
+            // Fresh capture → new MediaStreamTrack id, avoids TrackInvalidError loops
+            const profile = VideoService.getCameraProfile();
+            localBBBStream = await PreviewService.doGUM(deviceId, profile);
+            PreviewService.storeStream(deviceId, localBBBStream);
+            bridgeRefs.current.localVideoStreams[stream] = localBBBStream;
+            const freshTracks = localBBBStream.mediaStream?.getVideoTracks()
+              .filter((t) => t.readyState === 'live') ?? [];
+            if (freshTracks.length === 0) throw error;
+            publication = await publishRoom.localParticipant.publishTrack(
+              freshTracks[0],
+              publishOptions,
+            );
+          }
+        }
+      }
 
       if (publication == null || publication?.track == null) {
         throw new Error('Failed to publish track: publication or track is missing');
       }
 
+      logger.debug({
+        logCode: 'livekit_camera_published',
+        extraInfo: {
+          cameraId: stream,
+          trackName: publication?.trackName,
+          trackSid: publication?.trackSid,
+        },
+      }, `LiveKit: camera published - ${publication?.trackSid}`);
+
+      // Connecting flag cleared while publish was in flight (spurious destroyStream /
+      // list flap). Keep the track if the camera is still wanted; only drop it when
+      // the user actually stopped sharing.
+      if (!bridgeRefs.current.connectingStreams[stream]) {
+        const stillWanted = streamsRef.current.some((item) => item.stream === stream);
+        if (!stillWanted) {
+          await publishRoom.localParticipant.unpublishTrack(publication.track);
+          delete publishedLocalTracks[stream];
+          publishingStreamIds.delete(stream);
+          return;
+        }
+      }
+
       bridgeRefs.current.localTracks[stream] = publication.track;
+      publishedLocalTracks[stream] = publication.track;
+      publishRetryCounts.current.delete(stream);
       consumeExpectedStreamStop(stream);
       announcedFailures.current.delete(stream);
       toast.dismiss(CAMERA_STOPPED_TOAST_ID);
@@ -437,10 +629,74 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
       attachLiveKitStream(stream);
       notifyStreamStateChange(stream, 'completed');
     } catch (error) {
-      handleStreamFailure(error as Error, stream, isLocal);
-    } finally {
-      bridgeRefs.current.connectingStreams[stream] = false;
+      const err = error as Error;
+      const deviceId = VideoService.getDeviceIdFromStreamName(stream);
+      const bbbStream = bridgeRefs.current.localVideoStreams[stream]
+        ?? (deviceId ? PreviewService.getStream(deviceId) : null);
+      if (deviceId && bbbStream?.mediaStream?.active) {
+        PreviewService.storeStream(deviceId, bbbStream);
+        VideoService.setDeviceId(deviceId);
+        bridgeRefs.current.localVideoStreams[stream] = bbbStream;
+      }
+
+      // Transient: unpublish raced us, or LiveKit reconnect cleared pending resolvers.
+      // Keep the preload + stream list entry so updateStreams can retry — do not stopVideo.
+      const transient = err?.message?.includes('Cancelled publication')
+        || err?.message?.includes('room not connected')
+        || err?.message?.includes('timed out')
+        || err?.name === 'TrackInvalidError'
+        || err?.message?.includes('same ID has already been published');
+
+      const retries = publishRetryCounts.current.get(stream) ?? 0;
+      const canRetry = transient
+        && retries < MAX_PUBLISH_RETRIES
+        && streamsRef.current.some((item) => item.stream === stream);
+      let willRetry = false;
+      if (canRetry) {
+        willRetry = true;
+        publishRetryCounts.current.set(stream, retries + 1);
+        logger.warn({
+          logCode: 'livekit_camera_publish_transient',
+          extraInfo: {
+            cameraId: stream,
+            errorName: err.name,
+            errorMessage: err.message,
+            retry: retries + 1,
+          },
+        }, `LiveKit: transient camera publish failure, will retry - ${err.message}`);
+        // Keep connectingStreams true across the delay so updateStreams does not
+        // treat this camera as disconnected and tear down a parallel attempt.
+        bridgeRefs.current.connectingStreams[stream] = true;
+        // Release the module lock so the delayed startStream can enter again.
+        publishingStreamIds.delete(stream);
+        setTimeout(() => {
+          if (bridgeRefs.current.localTracks[stream] || publishedLocalTracks[stream]) {
+            bridgeRefs.current.connectingStreams[stream] = false;
+            if (publishedLocalTracks[stream]) {
+              bridgeRefs.current.localTracks[stream] = publishedLocalTracks[stream];
+            }
+            return;
+          }
+          if (!streamsRef.current.some((item) => item.stream === stream)) {
+            bridgeRefs.current.connectingStreams[stream] = false;
+            return;
+          }
+          bridgeRefs.current.connectingStreams[stream] = false;
+          startStream(stream, true);
+        }, 500 * (retries + 1));
+      } else {
+        publishRetryCounts.current.delete(stream);
+        handleStreamFailure(err, stream, isLocal);
+      }
+
+      if (!willRetry) {
+        bridgeRefs.current.connectingStreams[stream] = false;
+        publishingStreamIds.delete(stream);
+      }
+      return;
     }
+    bridgeRefs.current.connectingStreams[stream] = false;
+    publishingStreamIds.delete(stream);
   }, [handleLocalStreamInactive, handleStreamFailure, playStart]);
 
   const watchRemoteTrackEnd = (mediaStreamTrack: MediaStreamTrack) => {
@@ -614,9 +870,14 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
       evtRoom?.off(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
 
       VideoService.updatePeerDictionaryReference({});
-      exitVideo(false);
+      // Mark local stops expected so destroyStream does not toast mediaTimedOutError
+      // when HMR / transient unmount races a still-populated streamsRef.
       Object.keys(bridgeRefs.current.localTracks).forEach((stream) => {
-        stopStream(stream, false);
+        expectStreamStop(stream);
+      });
+      exitVideo(true);
+      Object.keys(bridgeRefs.current.localTracks).forEach((stream) => {
+        stopStream(stream, true);
       });
       Object.keys(bridgeRefs.current.remoteTracks).forEach((stream) => {
         stopStream(stream, false);
@@ -652,9 +913,15 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
   );
 
   const updateStreams = useCallback((streamsList: VideoItem[], shouldDebounce = false) => {
+    // Count in-flight publishes as connected. Otherwise a streams/cameraTracks
+    // re-render disconnects+reconnects mid-publish and LiveKit throws
+    // TrackInvalidError ("a track with the same ID has already been published").
+    const connectingIds = Object.keys(bridgeRefs.current.connectingStreams)
+      .filter((id) => bridgeRefs.current.connectingStreams[id]);
     const connectedStreamIds = [
       ...Object.keys(bridgeRefs.current.localTracks),
       ...Object.keys(bridgeRefs.current.remoteTracks),
+      ...connectingIds,
     ];
     const [
       streamsToConnect,
@@ -735,10 +1002,17 @@ const LiveKitCameraBridge: React.FC<LiveKitCameraBridgeProps> = ({
 
   useEffect(() => {
     const isLiveKitConnected = connectionState === ConnectionState.Connected;
+    // Local connecting streams are client-side only (joinVideo). Keep driving
+    // their LiveKit publish even while GraphQL flaps (Code 3001) — otherwise
+    // share never starts until the socket recovers.
+    const hasLocalConnecting = streams.some(
+      (item) => item.type === VIDEO_TYPES.CONNECTING && VideoService.isLocalStream(item.stream),
+    );
 
-    if (isClientConnected && isLiveKitConnected) {
+    if (isLiveKitConnected && (isClientConnected || hasLocalConnecting)) {
       const shouldDebounce = VideoService.isPaginationEnabled()
-        && currentVideoPageIndex !== undefined;
+        && currentVideoPageIndex !== undefined
+        && !hasLocalConnecting;
       updateStreams(streams, shouldDebounce);
     }
   }, [

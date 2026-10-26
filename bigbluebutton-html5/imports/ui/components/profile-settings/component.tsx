@@ -1,6 +1,7 @@
 import React, {
-  useCallback, useEffect,
+  useCallback, useEffect, useLayoutEffect, useRef, useState,
 } from 'react';
+import { flushSync } from 'react-dom';
 import { defineMessages, useIntl } from 'react-intl';
 import { useMutation } from '@apollo/client';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -36,7 +37,7 @@ import {
 import { useIsCustomVirtualBackgroundsEnabled, useIsVirtualBackgroundsEnabled } from '../../services/features';
 import AudioSelectors from './audio-selectors/component';
 import { useVideoPreview } from '/imports/ui/components/video-preview/hooks/useVideoPreview';
-import { CustomBgParams } from '/imports/ui/components/video-preview/hooks/types';
+import { BBBVideoStream, CustomBgParams } from '/imports/ui/components/video-preview/hooks/types';
 import usePreviousValue from '/imports/ui/hooks/usePreviousValue';
 import getFromUserSettings from '../../services/users-settings';
 import PanelHeader from '/imports/ui/components/common/panel-header/component';
@@ -47,10 +48,6 @@ const intlMessages: { [key: string]: { id: string; description?: string } } = de
     id: 'app.profileSettings.title',
     description: 'Label for the profile settings panel title',
   },
-  minimize: {
-    id: 'app.sidebarContent.minimizePanelLabel',
-    description: 'Minimize button label',
-  },
   username: {
     id: 'app.profileSettings.usernameTitle',
     description: 'Label for the username title in profile settings',
@@ -58,14 +55,6 @@ const intlMessages: { [key: string]: { id: string; description?: string } } = de
   cameraLabel: {
     id: 'app.videoPreview.cameraLabel',
     description: 'Camera dropdown label',
-  },
-  previousCameraLabel: {
-    id: 'app.videoPreview.previousCameraLabel',
-    description: 'Previous camera arrow button label',
-  },
-  nextCameraLabel: {
-    id: 'app.videoPreview.nextCameraLabel',
-    description: 'Next camera arrow button label',
   },
   sharedCameraLabel: {
     id: 'app.videoPreview.sharedCameraLabel',
@@ -99,15 +88,21 @@ const intlMessages: { [key: string]: { id: string; description?: string } } = de
     id: 'app.profileSettings.addExtraCamera',
     description: 'Add Extra Camera Button Label',
   },
+  removeCameraLabel: {
+    id: 'app.profileSettings.removeCamera',
+    description: 'Remove an extra camera section that is not being shared',
+  },
 });
 
 // The states with no stream to show keep the preview box's footprint.
 const PREVIEW_STATUS_STYLE: React.CSSProperties = {
-  width: '60%',
-  height: '25vh',
+  width: '100%',
+  height: '100%',
+  minHeight: '6rem',
   display: 'flex',
   justifyContent: 'center',
   alignItems: 'center',
+  boxSizing: 'border-box',
 };
 
 const PreviewStatus: React.FC<{ children?: React.ReactNode }> = ({ children }) => (
@@ -117,6 +112,161 @@ const PreviewStatus: React.FC<{ children?: React.ReactNode }> = ({ children }) =
     </Styled.VideoCol>
   </Styled.VideoPreviewContent>
 );
+
+interface SecondarySectionPreviewProps {
+  deviceId: string;
+  /** Still listed as shared by GraphQL (publisher may still own the tracks). */
+  isServerShared: boolean;
+  /** User asked to unshare; LiveKit teardown may still be in flight. */
+  isPendingUnshare: boolean;
+  /** Device currently held by useVideoPreview — skip capturing it a second time. */
+  activeWebcamDeviceId: string | null;
+  findingLabel: string;
+  animations: boolean;
+}
+
+/**
+ * Live preview for a camera section that is not the active useVideoPreview target.
+ * Shared cameras reuse the stored stream; others open a dedicated getUserMedia capture
+ * so every section can show video at once (the active section owns the editable stream).
+ */
+const SecondarySectionPreview: React.FC<SecondarySectionPreviewProps> = ({
+  deviceId,
+  isServerShared,
+  isPendingUnshare,
+  activeWebcamDeviceId,
+  findingLabel,
+  animations,
+}) => {
+  const videoElRef = useRef<HTMLVideoElement>(null);
+  const ownedStreamRef = useRef<BBBVideoStream | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const attachStream = useCallback((stream: BBBVideoStream | null) => {
+    const videoEl = videoElRef.current;
+    if (!videoEl) return;
+    videoEl.srcObject = stream?.mediaStream ?? null;
+  }, []);
+
+  const stopOwnedStream = useCallback(() => {
+    if (ownedStreamRef.current) {
+      PreviewService.terminateCameraStream(ownedStreamRef.current);
+      ownedStreamRef.current = null;
+    }
+    attachStream(null);
+  }, [attachStream]);
+
+  // useLayoutEffect so the track is released before the active section's doGUM
+  // (setPreviewToIndex flushSync's the active index change first).
+  useLayoutEffect(() => {
+    let cancelled = false;
+
+    // Unshare clicked but bridge still owns the publisher stream — do not stop()
+    // or re-gUM (that fires LiveKit inactiveError). Show a spinner until GraphQL
+    // drops the share and destroyStream finishes.
+    if (isServerShared && isPendingUnshare) {
+      stopOwnedStream();
+      attachStream(null);
+      setIsLoading(true);
+      setError(null);
+      return undefined;
+    }
+
+    if (isServerShared) {
+      stopOwnedStream();
+      const storedStream = PreviewService.getStream(deviceId) as BBBVideoStream | undefined;
+      const media = storedStream?.mediaStream;
+      const live = !!media?.active
+        && media.getVideoTracks().some((t) => t.readyState === 'live');
+      if (live) {
+        attachStream(storedStream);
+        setIsLoading(false);
+        setError(null);
+      } else {
+        // Shared entry missing/dead (race after publish) — keep placeholder.
+        attachStream(null);
+        setIsLoading(true);
+        setError(null);
+      }
+
+      return () => {
+        attachStream(null);
+      };
+    }
+
+    // Still the primary preview's device: wait until useVideoPreview switches away
+    // so we do not open a second capture on the same camera.
+    if (deviceId === activeWebcamDeviceId) {
+      stopOwnedStream();
+      setIsLoading(true);
+      setError(null);
+      return undefined;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    // Bridge already stopped the publisher; drop any stale map entry without
+    // risking a second stop on a live LiveKit stream.
+    PreviewService.forgetStream(deviceId);
+    const profile = PreviewService.getDefaultProfile();
+
+    PreviewService.doGUM(deviceId, profile)
+      .then((stream: BBBVideoStream) => {
+        if (cancelled) {
+          PreviewService.terminateCameraStream(stream);
+          return;
+        }
+        ownedStreamRef.current = stream;
+        attachStream(stream);
+        setIsLoading(false);
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setError(err?.message || 'previewError');
+        setIsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      stopOwnedStream();
+    };
+  }, [
+    deviceId, isServerShared, isPendingUnshare, activeWebcamDeviceId,
+    stopOwnedStream, attachStream,
+  ]);
+
+  // Keep the <video> mounted while loading so attachStream can set srcObject as
+  // soon as doGUM resolves (unmounting it for the spinner would drop the ref).
+  return (
+    <Styled.VideoPreviewContainer $inset>
+      <Styled.VideoPreviewWrapper>
+        {(isLoading || error) ? (
+          <PreviewStatus>
+            {error || (
+              <>
+                <span>{findingLabel}</span>
+                <Styled.FetchingAnimation animations={animations} />
+              </>
+            )}
+          </PreviewStatus>
+        ) : null}
+        <Styled.VideoPreviewContent style={{ display: (isLoading || error) ? 'none' : undefined }}>
+          <Styled.VideoCol>
+            <Styled.VideoPreview
+              mirroredVideo={VideoService.mirrorOwnWebcam()}
+              data-test="secondaryVideoPreview"
+              ref={videoElRef}
+              autoPlay
+              playsInline
+              muted
+            />
+          </Styled.VideoCol>
+        </Styled.VideoPreviewContent>
+      </Styled.VideoPreviewWrapper>
+    </Styled.VideoPreviewContainer>
+  );
+};
 
 interface CameraSection {
   deviceId: string | null;
@@ -148,28 +298,24 @@ const updateCameraSections = (
   sharedDevices: string[],
   prevSharedDevices: string[] | undefined,
   lastUsedWebcamDeviceId: string | null,
-  stoppedDeviceIds: string[],
+  _stoppedDeviceIds: string[],
   newlySharedDeviceIds: string[],
 ): CameraSection[] => {
   let newSections: CameraSection[];
 
   if (prevSharedDevices === undefined) {
-    // On first load, initialize with shared devices or default
     if (sharedDevices.length > 0) {
       newSections = sharedDevices.map(createCameraSection);
     } else {
       newSections = [createCameraSection(lastUsedWebcamDeviceId)];
     }
   } else {
-    // Handle device changes
     let currentSections = [...prevSections];
-    // Handle stopped devices
-    if (stoppedDeviceIds.length > 0) {
-      currentSections = currentSections.filter((s) => !s.deviceId
-        || !stoppedDeviceIds.includes(s.deviceId));
-    }
 
-    // Handle newly shared devices
+    // Do not remove sections when a cam is unshared — keep extras as drafts so
+    // unsharing cam 2 does not collapse the panel and risk stopping cam 1 next.
+    // Sections leave via explicit "Remove camera", or when only one device remains.
+
     newlySharedDeviceIds.forEach((deviceId) => {
       if (!currentSections.some((s) => s.deviceId === deviceId)) {
         currentSections.push(createCameraSection(deviceId));
@@ -178,20 +324,23 @@ const updateCameraSections = (
     newSections = currentSections;
   }
 
-  // If all sections were removed, add default
   if (newSections.length === 0) {
     newSections.push(createCameraSection(lastUsedWebcamDeviceId));
   }
 
-  // Deduplicate and sort sections
-  let finalSections = Array.from(new Map(newSections.map((s) => [s.deviceId, s])).values());
-
-  // if there is a shared camera, the first section should always be that camera
-  if (sharedDevices.length > 0) {
-    const sharedSections = finalSections.filter((s) => sharedDevices.includes(s.deviceId as string));
-    const unsharedSections = finalSections.filter((s) => !sharedDevices.includes(s.deviceId as string));
-    finalSections = [...sharedSections, ...unsharedSections];
-  }
+  // Keep list order stable — re-sorting shared cams to the top made unsharing
+  // the first section jump positions and risked stopping the wrong camera next.
+  const seen = new Set<string>();
+  const finalSections = newSections.filter((s) => {
+    if (!s.deviceId) {
+      if (seen.has('__null')) return false;
+      seen.add('__null');
+      return true;
+    }
+    if (seen.has(s.deviceId)) return false;
+    seen.add(s.deviceId);
+    return true;
+  });
 
   if (JSON.stringify(finalSections) === JSON.stringify(prevSections)) {
     return prevSections;
@@ -217,13 +366,18 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
 
   const [cameraSections, setCameraSections] = React.useState<CameraSection[]>([]);
   const [activePreviewIndex, setActivePreviewIndex] = React.useState(0);
+  // Unshare is async (GraphQL). Until sharedDevices drops the id, Secondary would keep
+  // painting the just-stopped publisher stream — mark these as unshared immediately.
+  const [optimisticUnshared, setOptimisticUnshared] = useState<Set<string>>(() => new Set());
   const prevSharedDevices = usePreviousValue(sharedDevices);
   const { hideNotificationToasts } = layoutSelectInput((i: Input) => i.notificationsBar);
   const hideNotifications = hideNotificationToasts || getFromUserSettings('bbb_hide_notifications', false);
 
   const isAlreadyShared = useCallback((webcamId: string | null) => {
-    return !!webcamId && sharedDevices.includes(webcamId);
-  }, [sharedDevices]);
+    return !!webcamId
+      && sharedDevices.includes(webcamId)
+      && !optimisticUnshared.has(webcamId);
+  }, [sharedDevices, optimisticUnshared]);
 
   const initialWebcamDeviceId = (sharedDevices && sharedDevices.length > 0)
     ? sharedDevices[0]
@@ -246,6 +400,8 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
     setCameraBrightness,
     stopVirtualBackground,
     applyStoredVirtualBg,
+    displayPreview,
+    cleanupStreamAndVideo,
   } = useVideoPreview({
     initialDeviceId: initialWebcamDeviceId,
     initialProfileId: PreviewService.getDefaultProfile().id,
@@ -259,36 +415,33 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
   const isCameraSwitchLocked = isCameraLoading && !previewError;
 
   useEffect(() => {
-    // fill section deviceId if empty or if only one section exists and it's different than current webcam
-    if (webcamDeviceId) {
-      if (!prevWebcamDeviceId) {
-        const emptySectionIndex = cameraSections.findIndex((s) => !s.deviceId);
-        if (emptySectionIndex !== -1) {
-          setCameraSections((prevSections) => {
-            const newSections = [...prevSections];
-            newSections[emptySectionIndex].deviceId = webcamDeviceId;
-            return newSections;
-          });
-          return;
-        }
-      }
+    if (!webcamDeviceId) return;
 
-      if (cameraSections.length === 1 && cameraSections[0].deviceId !== webcamDeviceId) {
+    if (!prevWebcamDeviceId) {
+      const emptySectionIndex = cameraSections.findIndex((s) => !s.deviceId);
+      if (emptySectionIndex !== -1) {
         setCameraSections((prevSections) => {
           const newSections = [...prevSections];
-          newSections[0].deviceId = webcamDeviceId;
+          newSections[emptySectionIndex] = {
+            ...newSections[emptySectionIndex],
+            ...createCameraSection(webcamDeviceId),
+          };
           return newSections;
         });
       }
+      return;
     }
-  }, [webcamDeviceId, cameraSections]);
+
+    if (cameraSections.length === 1 && !cameraSections[0].deviceId) {
+      setCameraSections([createCameraSection(webcamDeviceId)]);
+    }
+  }, [webcamDeviceId, cameraSections, prevWebcamDeviceId]);
 
   useEffect(() => {
     const pSharedDevices = prevSharedDevices || [];
     const stoppedDeviceIds = pSharedDevices.filter((d: string) => !sharedDevices.includes(d));
     const newlySharedDeviceIds = sharedDevices.filter((d: string) => !pSharedDevices.includes(d));
 
-    // No changes in shared devices, do nothing after initial load.
     if (
       stoppedDeviceIds.length === 0
       && newlySharedDeviceIds.length === 0
@@ -307,7 +460,6 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
         newlySharedDeviceIds,
       );
 
-      // update activeIndex if needed
       if (activePreviewIndex >= newSections.length) {
         const newActiveIndex = newSections.findIndex((s) => s.deviceId === webcamDeviceId);
         setActivePreviewIndex(newActiveIndex > -1 ? newActiveIndex : 0);
@@ -317,7 +469,6 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
     });
   }, [sharedDevices, lastUsedWebcamDeviceId, activePreviewIndex, webcamDeviceId]);
 
-  // Sync the active preview section with the current webcam device.
   useEffect(() => {
     const newActiveIndex = cameraSections.findIndex((s) => s.deviceId === webcamDeviceId);
     if (newActiveIndex !== -1 && newActiveIndex !== activePreviewIndex) {
@@ -352,35 +503,19 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
     });
   }, [muted, away, voiceToggle, setAway]);
 
-  const handleAddCamera = useCallback(() => {
-    const usedDeviceIds = cameraSections.map((s) => s.deviceId);
-    const nextAvailableDevice = availableWebcams.find((d) => !usedDeviceIds.includes(d.deviceId));
-    if (nextAvailableDevice) {
-      const vbgInfo = getSessionVirtualBackgroundInfo(nextAvailableDevice.deviceId);
-      const brightnessInfo = getCameraBrightnessInfoWithDefault(nextAvailableDevice.deviceId);
-      setCameraSections((prev) => [...prev, {
-        deviceId: nextAvailableDevice.deviceId,
-        brightness: brightnessInfo.brightness,
-        virtualBackgroundChecked: vbgInfo ? vbgInfo.type !== EFFECT_TYPES.NONE_TYPE : false,
-        virtualBackground: vbgInfo || { type: EFFECT_TYPES.NONE_TYPE, name: 'None' },
-      }]);
-      setPreviewToIndex(cameraSections.length, nextAvailableDevice.deviceId);
-    }
-  }, [cameraSections, availableWebcams]);
-
-  // switch the preview to the given index and deviceId
   const setPreviewToIndex = useCallback(async (index: number, newDeviceId: string) => {
     if (index !== activePreviewIndex) {
-      setActivePreviewIndex(index);
+      // Flush so SecondarySectionPreview's layout effect releases this device's
+      // secondary capture before useVideoPreview opens it as the active stream.
+      flushSync(() => {
+        setActivePreviewIndex(index);
+      });
     }
     if (newDeviceId !== webcamDeviceId) {
       const fakeEvent = { target: { value: newDeviceId } } as unknown as React.ChangeEvent<HTMLSelectElement>;
       const resolvedDeviceId = await handleSelectWebcam(fakeEvent);
       const streamingDeviceId = resolvedDeviceId || newDeviceId;
 
-      // The browser may hand over a different camera than the one asked for, so point the
-      // section at what is really streaming, otherwise its label names the wrong camera.
-      // Sections hold one camera each: leave it be if another section already owns this one
       if (streamingDeviceId !== newDeviceId) {
         setCameraSections((prevSections) => (
           prevSections.some((s, i) => i !== index && s.deviceId === streamingDeviceId)
@@ -389,7 +524,6 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
         ));
       }
 
-      // only set brightness if camera is not shared
       if (!isAlreadyShared(streamingDeviceId) && cameraSections[index]) {
         setCameraBrightness(cameraSections[index].brightness, streamingDeviceId);
       }
@@ -398,6 +532,19 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
     cameraSections, activePreviewIndex, webcamDeviceId, handleSelectWebcam,
     setCameraBrightness, isAlreadyShared,
   ]);
+
+  const handleAddCamera = useCallback(() => {
+    const usedDeviceIds = cameraSections.map((s) => s.deviceId);
+    const nextAvailableDevice = availableWebcams.find((d) => !usedDeviceIds.includes(d.deviceId));
+    if (!nextAvailableDevice) return;
+
+    const newIndex = cameraSections.length;
+    flushSync(() => {
+      setCameraSections((prev) => [...prev, createCameraSection(nextAvailableDevice.deviceId)]);
+      setActivePreviewIndex(newIndex);
+    });
+    setPreviewToIndex(newIndex, nextAvailableDevice.deviceId);
+  }, [cameraSections, availableWebcams, setPreviewToIndex]);
 
   const handleCameraSectionChange = useCallback((index: number, newDeviceId: string) => {
     const newSections = [...cameraSections];
@@ -409,9 +556,10 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
   const handleBrightnessChange = useCallback((index: number, value: number) => {
     const newSections = [...cameraSections];
     newSections[index].brightness = value;
+    const deviceId = newSections[index].deviceId;
 
-    setPreviewToIndex(index, newSections[index].deviceId as string).then(() => {
-      setCameraBrightness(value, newSections[index].deviceId);
+    setPreviewToIndex(index, deviceId as string).then(() => {
+      setCameraBrightness(value, deviceId);
       setCameraSections(newSections);
     });
   }, [cameraSections, setPreviewToIndex, setCameraBrightness]);
@@ -443,66 +591,135 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
     );
   }, [cameraSections, setPreviewToIndex, handleVirtualBgSelected]);
 
-  const handleShareWebcams = useCallback(() => {
-    const activeSection = cameraSections[activePreviewIndex];
+  const handleShareWebcam = useCallback(async (sectionIndex: number) => {
+    const section = cameraSections[sectionIndex];
+    if (!section?.deviceId) return;
 
-    if (currentVideoStream.current && activeSection.deviceId) {
-      const { type } = activeSection.virtualBackground;
-      // Key the shared stream by the camera it really captures: VideoService and doGUM
-      // look streams up by deviceId, so a mismatch would label this video as another camera
-      const deviceId = PreviewService.getVideoStreamDeviceId(currentVideoStream.current)
-        || activeSection.deviceId;
+    await setPreviewToIndex(sectionIndex, section.deviceId);
 
-      PreviewService.changeWebcam(deviceId);
-      PreviewService.changeProfile(selectedProfile);
+    if (!currentVideoStream.current) return;
 
-      if (
-        currentVideoStream.current.virtualBgService
-      && activeSection.brightness === 100
+    const { type } = section.virtualBackground;
+    const deviceId = PreviewService.getVideoStreamDeviceId(currentVideoStream.current)
+      || section.deviceId;
+
+    setOptimisticUnshared((prev) => {
+      if (!prev.has(deviceId)) return prev;
+      const next = new Set(prev);
+      next.delete(deviceId);
+      return next;
+    });
+
+    PreviewService.changeWebcam(deviceId);
+    PreviewService.changeProfile(selectedProfile);
+
+    if (
+      currentVideoStream.current.virtualBgService
+      && section.brightness === 100
       && type === EFFECT_TYPES.NONE_TYPE
-      ) {
-        stopVirtualBackground(currentVideoStream.current);
-      }
-
-      // Store the stream so VideoService can find it.
-      PreviewService.storeStream(deviceId, currentVideoStream.current);
-      // Share the video.
-      VideoService.joinVideo(deviceId, isCamLocked);
+    ) {
+      stopVirtualBackground(currentVideoStream.current);
     }
+
+    if (!PreviewService.storeStream(deviceId, currentVideoStream.current)
+      && PreviewService.getStream(deviceId) !== currentVideoStream.current) {
+      currentVideoStream.current.stop();
+    }
+    VideoService.joinVideo(deviceId, isCamLocked);
   }, [
     cameraSections,
-    activePreviewIndex,
-    currentVideoStream.current,
+    setPreviewToIndex,
+    currentVideoStream,
     selectedProfile,
     isCamLocked,
     stopVirtualBackground,
   ]);
 
-  const handleStopSharing = useCallback(async (sectionIndex: number, deviceId: string | null) => {
-    if (!deviceId) return;
+  // Called after GraphQL confirms unshare (LiveKit destroyStream already stopped
+  // the publisher). Safe to open a fresh local capture for the sidebar preview.
+  const refreshLocalPreview = useCallback(async (deviceId: string) => {
+    const sectionIndex = cameraSections.findIndex((s) => s.deviceId === deviceId);
+    const isActiveSection = sectionIndex === activePreviewIndex
+      || deviceId === webcamDeviceId;
 
+    PreviewService.forgetStream(deviceId);
+
+    if (!isActiveSection) {
+      // SecondarySectionPreview switches to doGUM when isServerShared goes false.
+      return;
+    }
+
+    const fakeEvent = {
+      target: { value: deviceId },
+    } as unknown as React.ChangeEvent<HTMLSelectElement>;
+    await handleSelectWebcam(fakeEvent);
+    displayPreview();
+  }, [
+    cameraSections,
+    activePreviewIndex,
+    webcamDeviceId,
+    handleSelectWebcam,
+    displayPreview,
+  ]);
+
+  const handleUnshareWebcam = useCallback((deviceId: string | null) => {
+    if (!deviceId) return;
+    setOptimisticUnshared((prev) => new Set(prev).add(deviceId));
     const streamId = VideoService.getMyStreamId(deviceId, streams);
     if (streamId) stopVideo(streamId);
 
-    if (cameraSections.length > 1) {
-      const newSections = cameraSections.filter((_, i) => i !== sectionIndex);
-      setCameraSections(newSections);
-
-      // If the active preview was removed, switch to the first available section
-      if (activePreviewIndex === sectionIndex) {
-        const newActiveIndex = 0;
-        setActivePreviewIndex(newActiveIndex);
-        const newDeviceId = newSections[newActiveIndex]?.deviceId;
-        if (newDeviceId) {
-          const fakeEvent = { target: { value: newDeviceId } } as unknown as React.ChangeEvent<HTMLSelectElement>;
-          await handleSelectWebcam(fakeEvent);
-        }
-      } else if (activePreviewIndex > sectionIndex) {
-        // If an earlier section was removed, decrement the active index to keep pointing to the same camera.
-        setActivePreviewIndex((prev) => prev - 1);
-      }
+    // Do not stop publisher tracks here — LiveKit treats that as inactiveError.
+    // Detach the preview ref only (forget map entry + clear video); re-gUM after
+    // sharedDevices drops and destroyStream has finished (effect below).
+    PreviewService.forgetStream(deviceId);
+    const sectionIndex = cameraSections.findIndex((s) => s.deviceId === deviceId);
+    const isActiveSection = sectionIndex === activePreviewIndex
+      || deviceId === webcamDeviceId;
+    if (isActiveSection) {
+      cleanupStreamAndVideo();
     }
-  }, [streams, stopVideo, cameraSections, activePreviewIndex, handleSelectWebcam]);
+  }, [
+    streams, stopVideo, cameraSections, activePreviewIndex, webcamDeviceId,
+    cleanupStreamAndVideo,
+  ]);
+
+  const handleRemoveCamera = useCallback(async (sectionIndex: number, deviceId: string | null) => {
+    if (deviceId && isAlreadyShared(deviceId)) {
+      handleUnshareWebcam(deviceId);
+    }
+
+    // Keep at least one camera section.
+    if (cameraSections.length <= 1) return;
+
+    const newSections = cameraSections.filter((_, i) => i !== sectionIndex);
+    setCameraSections(newSections);
+
+    if (activePreviewIndex === sectionIndex) {
+      const newActiveIndex = 0;
+      setActivePreviewIndex(newActiveIndex);
+      const newDeviceId = newSections[newActiveIndex]?.deviceId;
+      if (newDeviceId) {
+        const fakeEvent = { target: { value: newDeviceId } } as unknown as React.ChangeEvent<HTMLSelectElement>;
+        await handleSelectWebcam(fakeEvent);
+      }
+    } else if (activePreviewIndex > sectionIndex) {
+      setActivePreviewIndex((prev) => prev - 1);
+    }
+  }, [
+    streams, stopVideo, cameraSections, activePreviewIndex, handleSelectWebcam,
+    isAlreadyShared, handleUnshareWebcam,
+  ]);
+
+  // Only one physical camera left — drop surplus draft sections (keep shared first).
+  useEffect(() => {
+    if (availableWebcams.length > 1) return;
+
+    setCameraSections((prev) => {
+      if (prev.length <= 1) return prev;
+      const sharedSection = prev.find((s) => s.deviceId && sharedDevices.includes(s.deviceId));
+      return [sharedSection || prev[0]];
+    });
+  }, [availableWebcams.length, sharedDevices]);
 
   useEffect(() => {
     const activeSection = cameraSections[activePreviewIndex];
@@ -520,91 +737,97 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
     }
   }, [virtualBackgroundActive]);
 
-  // restart preview if the current camera is stopped
+  // Server confirmed unshare — wait briefly so LiveKit destroyStream can release
+  // the device, then open a local preview again.
   useEffect(() => {
-    const pSharedDevices = prevSharedDevices || [];
-    const stoppedDeviceIds = pSharedDevices.filter((d) => !sharedDevices.includes(d));
+    if (prevSharedDevices === undefined) return;
+    const stoppedDeviceIds = prevSharedDevices.filter((d) => !sharedDevices.includes(d));
+    if (!stoppedDeviceIds.length) return;
 
-    if (webcamDeviceId && stoppedDeviceIds.includes(webcamDeviceId)) {
-      // The current preview device was stopped externally.
-      // Switch to another available device if possible.
-      const nextSharedDevice = sharedDevices.find((d) => d !== webcamDeviceId);
-      if (nextSharedDevice) {
-        const newIndex = cameraSections.findIndex((s) => s.deviceId === nextSharedDevice);
-        if (newIndex !== -1) {
-          setPreviewToIndex(newIndex, nextSharedDevice);
-          return;
-        }
-      }
+    const timers = stoppedDeviceIds.map((deviceId) => window.setTimeout(() => {
+      void refreshLocalPreview(deviceId).finally(() => {
+        setOptimisticUnshared((prev) => {
+          if (!prev.has(deviceId)) return prev;
+          const next = new Set(prev);
+          next.delete(deviceId);
+          return next;
+        });
+      });
+    }, 150));
 
-      // If no other shared device is available, restart the current preview.
-      // This is useful when the user stops the only shared camera.
-      // wait a bit before restarting
-      setTimeout(() => {
-        const fakeEvent = { target: { value: webcamDeviceId } } as unknown as React.ChangeEvent<HTMLSelectElement>;
-        handleSelectWebcam(fakeEvent);
-      }, 500);
-    }
-  }, [sharedDevices, webcamDeviceId, cameraSections, handleSelectWebcam]);
+    return () => timers.forEach((id) => window.clearTimeout(id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedDevices, prevSharedDevices]);
 
-  const changePreview = useCallback((direction: number) => {
-    const newIndex = (activePreviewIndex + direction + cameraSections.length) % cameraSections.length;
-    setPreviewToIndex(newIndex, cameraSections[newIndex].deviceId as string);
-  }, [activePreviewIndex, cameraSections, webcamDeviceId]);
-
-  function renderWebcamPreview(): React.ReactNode {
+  function renderSectionPreview(section: CameraSection, sectionIndex: number): React.ReactNode {
     const Settings = getSettingsSingletonInstance();
     const { animations } = Settings.application;
+    const isActive = sectionIndex === activePreviewIndex;
+    const findingLabel = formatMessage(intlMessages.findingWebcamsLabel);
+    const currentDevice = availableWebcams.find((d) => d.deviceId === section.deviceId);
+    const cameraName = currentDevice?.label
+      || (section.deviceId
+        ? formatMessage(intlMessages.cameraLabel)
+        : `${formatMessage(intlMessages.cameraLabel)} ${sectionIndex + 1}`);
+    const isServerShared = !!section.deviceId && sharedDevices.includes(section.deviceId);
+    const isPendingUnshare = !!section.deviceId && optimisticUnshared.has(section.deviceId);
 
-    const activeSection = cameraSections[activePreviewIndex];
+    let previewContent: React.ReactNode;
 
-    if (!activeSection) return null;
-
-    const currentDevice = availableWebcams.find((d) => d.deviceId === activeSection.deviceId);
-    const cameraName = currentDevice?.label || `${formatMessage(intlMessages.cameraLabel)} ${activePreviewIndex + 1}`;
+    if (isActive) {
+      previewContent = (
+        <CameraPreview
+          viewState={viewState}
+          videoRef={videoRef}
+          findingLabel={findingLabel}
+          animations={animations}
+          statusContainer={PreviewStatus}
+          deviceError={deviceError}
+          previewError={previewError}
+          inset
+          onVideoElementReady={displayPreview}
+        >
+          {isPendingUnshare ? (
+            <div style={{
+              ...PREVIEW_STATUS_STYLE,
+              position: 'absolute',
+              inset: 0,
+              zIndex: 1,
+              backgroundColor: 'inherit',
+            }}
+            >
+              <span>{findingLabel}</span>
+              <Styled.FetchingAnimation animations={animations} />
+            </div>
+          ) : null}
+        </CameraPreview>
+      );
+    } else if (section.deviceId) {
+      previewContent = (
+        <SecondarySectionPreview
+          key={`${section.deviceId}-${isServerShared ? 'srv' : 'loc'}-${isPendingUnshare ? 'pend' : 'idle'}`}
+          deviceId={section.deviceId}
+          isServerShared={isServerShared}
+          isPendingUnshare={isPendingUnshare}
+          activeWebcamDeviceId={webcamDeviceId}
+          findingLabel={findingLabel}
+          animations={animations}
+        />
+      );
+    } else {
+      previewContent = <PreviewStatus />;
+    }
 
     return (
-      <CameraPreview
-        viewState={viewState}
-        videoRef={videoRef}
-        findingLabel={formatMessage(intlMessages.findingWebcamsLabel)}
-        animations={animations}
-        statusContainer={PreviewStatus}
-        deviceError={deviceError}
-        previewError={previewError}
-      >
-        {cameraSections.length > 1 && (
-        <>
-          <Styled.PreviewArrowButton
-            aria-label={formatMessage(intlMessages.previousCameraLabel)}
-            data-test="previousCameraButton"
-            onClick={() => changePreview(-1)}
-            position="left"
-            disabled={isCameraSwitchLocked}
-          >
-            <Styled.ArrowLeftIcon />
-          </Styled.PreviewArrowButton>
-          <Styled.PreviewArrowButton
-            aria-label={formatMessage(intlMessages.nextCameraLabel)}
-            data-test="nextCameraButton"
-            onClick={() => changePreview(1)}
-            position="right"
-            disabled={isCameraSwitchLocked}
-          >
-            <Styled.ArrowRightIcon />
-          </Styled.PreviewArrowButton>
-          <Styled.CameraNameLabel>
-            {cameraName}
-          </Styled.CameraNameLabel>
-        </>
-        )}
-      </CameraPreview>
+      <Styled.PreviewRow>
+        <Styled.PreviewTitle>
+          <Styled.IconCamera aria-hidden />
+          <Styled.PreviewTitleText title={cameraName}>{cameraName}</Styled.PreviewTitleText>
+        </Styled.PreviewTitle>
+        {previewContent}
+      </Styled.PreviewRow>
     );
   }
-
-  const isCameraAlreadyShared = cameraSections[activePreviewIndex]
-    && cameraSections[activePreviewIndex].deviceId
-    && isAlreadyShared(cameraSections[activePreviewIndex].deviceId as string);
 
   return (
     <Styled.RootContainer>
@@ -615,7 +838,6 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
         closeButtonDataTest="closeProfileSettings"
       />
       <Styled.Separator />
-      {renderWebcamPreview()}
       <Styled.ProfileSettings>
         <Styled.UsernameContainer>
           <Styled.UsernameTitle>{formatMessage(intlMessages.username)}</Styled.UsernameTitle>
@@ -663,97 +885,116 @@ const ProfileSettings: React.FC<ProfileSettingsProps> = () => {
         {cameraSections.map((section: CameraSection, sectionIndex) => {
           const usedDeviceIds = cameraSections
             .map((s) => s.deviceId)
-            .filter((id) => id !== section.deviceId);
-          const availableDevicesForSection = availableWebcams
+            .filter((id) => id && id !== section.deviceId);
+          const selectValue = section.deviceId || '';
+          let availableDevicesForSection = availableWebcams
             .filter((d) => !usedDeviceIds.includes(d.deviceId));
+          if (
+            selectValue
+            && !availableDevicesForSection.some((d) => d.deviceId === selectValue)
+          ) {
+            const fromAll = availableWebcams.find((d) => d.deviceId === selectValue);
+            availableDevicesForSection = [
+              fromAll || { deviceId: selectValue, label: selectValue },
+              ...availableDevicesForSection,
+            ];
+          }
+
+          const shared = isAlreadyShared(section.deviceId);
+          const canRemove = cameraSections.length > 1 && !shared;
 
           return (
             <React.Fragment key={section.deviceId || `section-${sectionIndex}`}>
-              <Styled.DevicesSettingsContainer>
-                <Styled.DeviceContainer>
-                  <Styled.IconCamera />
+              <Styled.CameraSection>
+                <Styled.DevicesSettingsContainer>
+                  {renderSectionPreview(section, sectionIndex)}
                   <CameraDeviceSelector
                     devices={availableDevicesForSection}
-                    value={!previewError ? section.deviceId || webcamDeviceId || '' : ''}
+                    value={selectValue}
                     onChange={(deviceId) => handleCameraSectionChange(sectionIndex, deviceId)}
                     disabled={isCameraSwitchLocked}
                     dataTest={`cameraDeviceSelector-${sectionIndex}`}
                   />
-                </Styled.DeviceContainer>
-                <Styled.DeviceContainer extraPadding={cameraSections.length > 1}>
-                  <Styled.WbSunnyIcon />
                   <CameraBrightnessInput
                     brightness={section.brightness}
                     onChange={(value) => handleBrightnessChange(sectionIndex, value)}
                     disabled={isCameraLoading}
                   />
-                </Styled.DeviceContainer>
-                <Styled.DeviceContainer extraPadding={cameraSections.length > 1}>
                   <CameraQualitySelector
                     value={selectedProfile || ''}
                     onChange={handleSelectProfile}
-                    disabled={isAlreadyShared(section.deviceId as string) || isCameraSwitchLocked}
-                    tooltip={isAlreadyShared(section.deviceId as string)
+                    disabled={shared || isCameraSwitchLocked}
+                    tooltip={shared
                       ? formatMessage(intlMessages.sharedCameraLabel)
                       : undefined}
                     dataTest={`cameraQualitySelector-${sectionIndex}`}
                   />
-                </Styled.DeviceContainer>
-              </Styled.DevicesSettingsContainer>
-              <Styled.VirtualBackgroundContainer extraPadding={cameraSections.length > 1}>
-                {isVirtualBackgroundsEnabled && (
-                  <CameraVirtualBackground
-                    checked={section.virtualBackgroundChecked}
-                    onCheckedChange={(checked) => handleVirtualBgChange(sectionIndex, checked)}
-                    onSelected={(type, name, customParams) => handleVirtualBgSelectedForSection(
-                      sectionIndex, type, name, customParams as CustomBgParams,
+                </Styled.DevicesSettingsContainer>
+                <Styled.VirtualBackgroundContainer>
+                  {isVirtualBackgroundsEnabled && (
+                    <CameraVirtualBackground
+                      checked={section.virtualBackgroundChecked}
+                      onCheckedChange={(checked) => handleVirtualBgChange(sectionIndex, checked)}
+                      onSelected={(type, name, customParams) => handleVirtualBgSelectedForSection(
+                        sectionIndex, type, name, customParams as CustomBgParams,
+                      )}
+                      initialState={section.virtualBackground}
+                      isCustomVirtualBackgroundsEnabled={isCustomVirtualBackgroundsEnabled}
+                      locked={isCameraLoading}
+                      disabled={!isVirtualBackgroundsEnabled || isCameraLoading}
+                      hideNotificationToasts={hideNotifications}
+                    />
+                  )}
+                  <Styled.SaveButtonContainer>
+                    {shared ? (
+                      <Styled.SaveButton
+                        color="danger"
+                        label={formatMessage(intlMessages.stopSharingLabel)}
+                        onClick={() => handleUnshareWebcam(section.deviceId)}
+                        data-test={`stopSharingCamera-${sectionIndex}`}
+                      />
+                    ) : (
+                      <Styled.SaveButton
+                        color="primary"
+                        label={formatMessage(intlMessages.joinVideoLabel)}
+                        disabled={
+                          isCameraLoading
+                          || !section.deviceId
+                          || (sectionIndex === activePreviewIndex && !!(deviceError || previewError))
+                        }
+                        onClick={() => handleShareWebcam(sectionIndex)}
+                        data-test={`shareCamera-${sectionIndex}`}
+                      />
                     )}
-                    initialState={section.virtualBackground}
-                    isCustomVirtualBackgroundsEnabled={isCustomVirtualBackgroundsEnabled}
-                    locked={isCameraLoading}
-                    disabled={!isVirtualBackgroundsEnabled || isCameraLoading}
-                    hideNotificationToasts={hideNotifications}
-                  />
-                )}
-              </Styled.VirtualBackgroundContainer>
-              {isAlreadyShared(section.deviceId) && (
-                <Styled.StopSharingButtonText
-                  extraPadding={cameraSections.length > 1}
-                  onClick={() => handleStopSharing(sectionIndex, section.deviceId)}
-                >
-                  {formatMessage(intlMessages.stopSharingLabel)}
-                </Styled.StopSharingButtonText>
-              )}
+                    {canRemove && (
+                      <Styled.RemoveCameraButtonText
+                        type="button"
+                        onClick={() => handleRemoveCamera(sectionIndex, section.deviceId)}
+                        data-test={`removeCameraButton-${sectionIndex}`}
+                      >
+                        {formatMessage(intlMessages.removeCameraLabel)}
+                      </Styled.RemoveCameraButtonText>
+                    )}
+                  </Styled.SaveButtonContainer>
+                </Styled.VirtualBackgroundContainer>
+              </Styled.CameraSection>
               {sectionIndex < cameraSections.length - 1 && <Styled.Separator />}
             </React.Fragment>
           );
         })}
+        {availableWebcams && availableWebcams.length > 1 && (
+          <Styled.AddCameraContainer>
+            <Styled.AddCameraButtonAndText
+              onClick={handleAddCamera}
+              disabled={cameraSections.length >= availableWebcams.length || isCameraSwitchLocked}
+              data-test="addExtraCameraButton"
+            >
+              <Styled.AddCameraIcon />
+              {formatMessage(intlMessages.addExtraCameraLabel)}
+            </Styled.AddCameraButtonAndText>
+          </Styled.AddCameraContainer>
+        )}
       </Styled.ProfileSettings>
-      {availableWebcams && availableWebcams.length > 1 && (
-      <>
-        <Styled.Separator />
-        <Styled.AddCameraContainer>
-          <Styled.AddCameraButtonAndText
-            onClick={handleAddCamera}
-            disabled={cameraSections.length >= availableWebcams.length || isCameraSwitchLocked}
-            data-test="addExtraCameraButton"
-          >
-            <Styled.AddCameraIcon />
-            {formatMessage(intlMessages.addExtraCameraLabel)}
-          </Styled.AddCameraButtonAndText>
-        </Styled.AddCameraContainer>
-      </>
-      )}
-      <Styled.Separator />
-      <Styled.SaveButtonContainer>
-        <Styled.SaveButton
-          disabled={isCameraAlreadyShared || isCameraLoading || !!(deviceError || previewError)}
-          color="primary"
-          label={formatMessage(intlMessages.joinVideoLabel)}
-          onClick={handleShareWebcams}
-          data-test="saveProfileSettings"
-        />
-      </Styled.SaveButtonContainer>
     </Styled.RootContainer>
   );
 };

@@ -116,7 +116,8 @@ export const CameraBrightnessInput: React.FC<CameraBrightnessInputProps> = ({
   if (!ENABLE_CAMERA_BRIGHTNESS) return null;
 
   return (
-    <>
+    <Styled.FieldStack>
+      <Styled.FieldLabel>{formatMessage(intlMessages.brightnessLabel)}</Styled.FieldLabel>
       <Styled.BrightnessSlider
         sx={{ color: colorPrimary }}
         value={brightness - 100}
@@ -134,7 +135,7 @@ export const CameraBrightnessInput: React.FC<CameraBrightnessInputProps> = ({
       <div style={{ display: 'none' }} id={brightnessDescId}>
         {formatMessage(intlMessages.brightnessDesc)}
       </div>
-    </>
+    </Styled.FieldStack>
   );
 };
 
@@ -180,7 +181,12 @@ export const CameraQualitySelector: React.FC<CameraQualitySelectorProps> = ({
     if (profiles.length === 0) {
       return <span>{formatMessage(intlMessages.profileNotFoundLabel)}</span>;
     }
-    return tooltip ? <Tooltip title={tooltip}>{selector}</Tooltip> : selector;
+    // Block wrapper keeps the select at full row width when Tooltip wraps it.
+    return tooltip ? (
+      <Tooltip title={tooltip}>
+        <span style={{ display: 'block', width: '100%' }}>{selector}</span>
+      </Tooltip>
+    ) : selector;
   };
 
   return (
@@ -218,10 +224,9 @@ export const CameraVirtualBackground: React.FC<CameraVirtualBackgroundProps> = (
 
   const switchTitle = (
     <Styled.SwitchTitle
-      sx={{ margin: 0 }}
+      sx={{ margin: 0, gap: '0.75rem' }}
       control={(
         <Styled.MaterialSwitch
-          sx={{ marginRight: '1rem' }}
           checked={checked}
           onChange={(_, isChecked) => onCheckedChange(isChecked)}
           disabled={disabled || !supported}

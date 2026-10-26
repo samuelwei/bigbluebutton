@@ -71,8 +71,9 @@ const useVideoStreamsSubscription = createUseSubscription(
 export const useStreams = () => {
   const { data: meeting } = useMeeting((m) => ({ meetingId: m.meetingId }));
   const { data, loading, errors } = useVideoStreamsSubscription();
-
-  if (loading) return [];
+  // GraphQL flaps (Code 3001) briefly set loading=true with no payload. Returning []
+  // unmounts LiveKitCameraBridge and tears down published cameras mid-share.
+  const lastStreamsRef = useRef<StreamItem[]>([]);
 
   if (errors) {
     errors.forEach((error) => {
@@ -84,6 +85,8 @@ export const useStreams = () => {
       }, 'Video streams subscription failed.');
     });
   }
+
+  if (loading) return lastStreamsRef.current;
 
   const filteredStreams = meeting?.meetingId
     ? filterByMeetingId(
@@ -120,7 +123,8 @@ export const useStreams = () => {
     };
   });
 
-  return mappedStreams.length > 0 ? mappedStreams : [];
+  lastStreamsRef.current = mappedStreams;
+  return mappedStreams;
 };
 
 export const useStatus = () => {
@@ -966,13 +970,16 @@ export const useExitVideo = (forceExit = false) => {
 
   const exitVideo = useCallback(async (expected = true) => {
     const { isConnected } = getVideoState();
+    const ownStreams = ownStreamsRef.current;
 
-    if (isConnected || forceExit) {
+    // LiveKit can show a published camera before cameraBroadcastStart lands
+    // (joinedVideo → isConnected). Still tear down whatever we own.
+    if (isConnected || forceExit || ownStreams.length > 0) {
       const sendUserUnshareWebcam = (cameraId: string) => {
         return cameraBroadcastStop({ variables: { cameraId } });
       };
 
-      const results = ownStreamsRef.current.map((streamId) => {
+      const results = ownStreams.map((streamId) => {
         if (expected) expectStreamStop(streamId);
 
         return sendUserUnshareWebcam(streamId);

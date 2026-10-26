@@ -298,42 +298,34 @@ const CameraSetup: React.FC<CameraSetupProps> = ({ micControl, children }) => {
         {children}
         <ProfileStyled.Separator />
         <ProfileStyled.DevicesSettingsContainer>
-          <ProfileStyled.DeviceContainer>
-            <ProfileStyled.IconCamera />
-            <CameraDeviceSelector
-              devices={availableWebcams}
-              value={!previewError ? webcamDeviceId || '' : ''}
-              onChange={(deviceId) => handleSelectWebcam({
-                target: { value: deviceId },
-              } as React.ChangeEvent<HTMLSelectElement>)}
-              disabled={!shareCamera}
-              emptyLabel={emptyDeviceLabel}
-              error={showPermissionError}
-              describedBy={showPermissionError ? cameraErrorId : undefined}
-              dataTest="preFlightCameraDevice"
-            />
-          </ProfileStyled.DeviceContainer>
+          <CameraDeviceSelector
+            devices={availableWebcams}
+            value={!previewError ? webcamDeviceId || '' : ''}
+            onChange={(deviceId) => handleSelectWebcam({
+              target: { value: deviceId },
+            } as React.ChangeEvent<HTMLSelectElement>)}
+            disabled={!shareCamera}
+            emptyLabel={emptyDeviceLabel}
+            error={showPermissionError}
+            describedBy={showPermissionError ? cameraErrorId : undefined}
+            dataTest="preFlightCameraDevice"
+          />
           {showPermissionError && (
             <ProfileStyled.DeviceFieldError id={cameraErrorId} data-test="preFlightCameraDeviceError">
               {formatMessage(intlMessages.permissionPending)}
             </ProfileStyled.DeviceFieldError>
           )}
-          <ProfileStyled.DeviceContainer>
-            <ProfileStyled.WbSunnyIcon />
-            <CameraBrightnessInput
-              brightness={brightness}
-              onChange={(value) => setCameraBrightness(value, webcamDeviceId)}
-              disabled={!shareCamera || isCameraLoading}
-            />
-          </ProfileStyled.DeviceContainer>
-          <ProfileStyled.DeviceContainer>
-            <CameraQualitySelector
-              value={selectedProfile || ''}
-              onChange={handleSelectProfile}
-              disabled={!shareCamera}
-              dataTest="preFlightCameraQuality"
-            />
-          </ProfileStyled.DeviceContainer>
+          <CameraBrightnessInput
+            brightness={brightness}
+            onChange={(value) => setCameraBrightness(value, webcamDeviceId)}
+            disabled={!shareCamera || isCameraLoading}
+          />
+          <CameraQualitySelector
+            value={selectedProfile || ''}
+            onChange={handleSelectProfile}
+            disabled={!shareCamera}
+            dataTest="preFlightCameraQuality"
+          />
         </ProfileStyled.DevicesSettingsContainer>
         {isVirtualBackgroundsEnabled && shareCamera && (
           <ProfileStyled.VirtualBackgroundContainer>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import VideoService from '/imports/ui/components/video-provider/service';
 import { VIEW_STATES } from '/imports/ui/components/video-preview/hooks/types';
 // The styled pieces still live in the profile panel; moving them into a neutral
@@ -18,6 +18,10 @@ interface CameraPreviewProps {
   placeholder?: React.ReactNode;
   /** Overlaid on the preview: the pre-flight controls, the profile arrows. */
   children?: React.ReactNode;
+  /** Compact layout when the preview sits inside a camera section row. */
+  inset?: boolean;
+  /** Called once the <video> element is mounted so the stream can be attached. */
+  onVideoElementReady?: () => void;
 }
 
 /**
@@ -35,7 +39,15 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
   previewError = null,
   placeholder = null,
   children = null,
+  inset = false,
+  onVideoElementReady,
 }) => {
+  useEffect(() => {
+    if (viewState === VIEW_STATES.found && !previewError && onVideoElementReady) {
+      onVideoElementReady();
+    }
+  }, [viewState, previewError, onVideoElementReady]);
+
   const renderContent = () => {
     if (placeholder) return <StatusContainer>{placeholder}</StatusContainer>;
 
@@ -72,7 +84,7 @@ const CameraPreview: React.FC<CameraPreviewProps> = ({
   };
 
   return (
-    <Styled.VideoPreviewContainer>
+    <Styled.VideoPreviewContainer $inset={inset}>
       <Styled.VideoPreviewWrapper>
         {renderContent()}
         {children}

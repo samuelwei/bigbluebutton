@@ -21,11 +21,46 @@ interface CaptureSettings {
   frameRate: number | undefined;
 }
 
+// Camera profiles may use bare numbers (BBB defaults) or MediaTrackConstraint
+// objects like { ideal: 32 }. LiveKit's VideoPreset only accepts finite numbers —
+// passing an object yields undefined dimensions and non-finite scaleResolutionDownBy.
+const resolveConstraintNumber = (
+  value: unknown,
+  fallback?: number,
+): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+
+  if (value && typeof value === 'object') {
+    const constraint = value as { exact?: unknown; ideal?: unknown; max?: unknown };
+    const candidate = [constraint.exact, constraint.ideal, constraint.max]
+      .find((n) => typeof n === 'number' && Number.isFinite(n) && (n as number) > 0);
+
+    if (typeof candidate === 'number') return candidate;
+  }
+
+  if (typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0) {
+    return fallback;
+  }
+
+  return undefined;
+};
+
 const getCameraCaptureSettings = (stream: MediaStream): CaptureSettings => {
   const profile = VideoService.getCameraProfile();
-  const profileWidth = profile?.constraints?.width ?? DEFAULT_CAM_WIDTH;
-  const profileHeight = profile?.constraints?.height ?? DEFAULT_CAM_HEIGHT;
-  const profileFps = profile?.constraints?.frameRate ?? DEFAULT_CAM_FPS;
+  const profileWidth = resolveConstraintNumber(
+    profile?.constraints?.width,
+    DEFAULT_CAM_WIDTH,
+  ) ?? DEFAULT_CAM_WIDTH;
+  const profileHeight = resolveConstraintNumber(
+    profile?.constraints?.height,
+    DEFAULT_CAM_HEIGHT,
+  ) ?? DEFAULT_CAM_HEIGHT;
+  const profileFps = resolveConstraintNumber(
+    profile?.constraints?.frameRate,
+    DEFAULT_CAM_FPS,
+  ) ?? DEFAULT_CAM_FPS;
 
   try {
     const track = stream.getVideoTracks()[0];
@@ -37,9 +72,10 @@ const getCameraCaptureSettings = (stream: MediaStream): CaptureSettings => {
     const settings = track.getSettings();
 
     return {
-      width: settings.width ?? profileWidth,
-      height: settings.height ?? profileHeight,
-      frameRate: settings.frameRate ?? profileFps,
+      // 0 is a real getSettings() value before the first frame; treat it as missing
+      width: resolveConstraintNumber(settings.width, profileWidth) ?? profileWidth,
+      height: resolveConstraintNumber(settings.height, profileHeight) ?? profileHeight,
+      frameRate: resolveConstraintNumber(settings.frameRate, profileFps) ?? profileFps,
     };
   } catch {
     return { width: profileWidth, height: profileHeight, frameRate: profileFps };
@@ -83,13 +119,19 @@ const profileToPreset = (
 ): VideoPreset => {
   const bitrate = profile?.bitrate || 0;
   const bitrateInBps = bitrate * 1000 || DEFAULT_CAM_BITRATE;
-  const fps = profile.constraints?.frameRate;
+  const fps = resolveConstraintNumber(profile.constraints?.frameRate);
+  // Only bare numeric width/height are encoding targets (e.g. hoch: 1280).
+  // MediaTrackConstraint objects like { ideal: 32 } are getUserMedia hints — using
+  // them as VideoPreset dimensions produced non-finite scaleResolutionDownBy.
+  const constraintWidth = profile.constraints?.width;
+  const constraintHeight = profile.constraints?.height;
+  const hasNumericSize = typeof constraintWidth === 'number' && constraintWidth > 0
+    && typeof constraintHeight === 'number' && constraintHeight > 0;
 
-  // We have constraints with the required fields, map directly
-  if (profile.constraints?.width && profile.constraints?.height) {
+  if (hasNumericSize) {
     return new VideoPreset(
-      profile.constraints.width,
-      profile.constraints.height,
+      constraintWidth,
+      constraintHeight,
       bitrateInBps,
       fps,
       'medium',

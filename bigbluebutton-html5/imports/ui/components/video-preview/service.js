@@ -52,11 +52,32 @@ const isStreamStored = (stream) => {
   return Array.from(VIDEO_STREAM_STORAGE.values()).some((stored) => stored === stream);
 };
 
+// Drop the map entry without stopping tracks. Use when LiveKit/bridge still owns
+// the publisher stream — stopping here fires `inactive` and looks like an unexpected
+// camera failure. destroyStream stops the tracks when unshare finishes.
+const forgetStream = (deviceId) => VIDEO_STREAM_STORAGE.delete(deviceId);
+
 const deleteStream = (deviceId) => {
   const stream = getStream(deviceId);
   if (stream == null) return false;
-  MediaStreamUtils.stopMediaStreamTracks(stream);
-  return VIDEO_STREAM_STORAGE.delete(deviceId);
+  // Remove first so stream.once('inactive') → deleteStream re-entry is a no-op.
+  VIDEO_STREAM_STORAGE.delete(deviceId);
+  // Prefer BBBVideoStream.stop() so virtual-background original camera tracks are
+  // released too. Stopping only mediaStream leaves the canvas output dead while
+  // the real device stays busy — re-gUM then fails or paints a black preview.
+  if (typeof stream.stop === 'function') {
+    stream.stop();
+  } else {
+    MediaStreamUtils.stopMediaStreamTracks(stream.mediaStream || stream);
+  }
+  return true;
+};
+
+const isStoredStreamActive = (stream) => {
+  if (!stream) return false;
+  if (typeof stream.active === 'boolean') return stream.active;
+  // BBBVideoStream: MediaStream.active lives on mediaStream / originalStream
+  return !!(stream.mediaStream?.active ?? stream.originalStream?.active);
 };
 
 const storeStream = (deviceId, stream) => {
@@ -67,7 +88,7 @@ const storeStream = (deviceId, stream) => {
   // and store the new one
   if (hasStream(deviceId)) {
     const existingStream = getStream(deviceId);
-    if (existingStream.active) return false;
+    if (isStoredStreamActive(existingStream)) return false;
     deleteStream(deviceId);
   }
 
@@ -198,9 +219,17 @@ const _retry = (foo, opts) => new Promise((resolve, reject) => {
 const doGUM = (deviceId, profile) => {
   const GUM_TIMEOUT = window.meetingClientSettings.public.kurento.gUMTimeout;
 
-  // Check if this is an already loaded stream
+  // Reuse a stored stream only while it still has live tracks. After a cancelled
+  // LiveKit publish the entry can linger with ended tracks — returning it makes
+  // callers think gUM succeeded when there is nothing to publish.
   if (deviceId && hasStream(deviceId)) {
-    return Promise.resolve(getStream(deviceId));
+    const existing = getStream(deviceId);
+    if (isStoredStreamActive(existing)) {
+      const live = existing?.mediaStream?.getVideoTracks?.()
+        ?.some((t) => t.readyState === 'live');
+      if (live) return Promise.resolve(existing);
+    }
+    deleteStream(deviceId);
   }
 
   const constraints = {
@@ -318,6 +347,7 @@ export default {
   storeStream,
   getStream,
   hasStream,
+  forgetStream,
   deleteStream,
   clearStreams,
   digestVideoDevices,

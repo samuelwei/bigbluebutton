@@ -126,7 +126,7 @@ const VideoProviderContainer: React.FC<VideoProviderContainerProps> = (props) =>
   const stopVideo = useStopVideo();
   const info = useInfo();
   const myPageSize = useMyPageSize();
-  const { numberOfPages } = useVideoState();
+  const { numberOfPages, isConnected } = useVideoState();
   const isPaginationEnabled = useIsPaginationEnabled();
   const isGridEnabled = useIsGridEnabled();
 
@@ -163,7 +163,9 @@ const VideoProviderContainer: React.FC<VideoProviderContainerProps> = (props) =>
     if (streamIsConnected) setConnectingStream(null);
   }, [streams, connectingStream]);
 
-  if (!usersVideo.length && !isGridEnabled) return null;
+  // Keep the bridge mounted across GraphQL flaps / empty snapshots so published
+  // cameras are not torn down by the LiveKitCameraBridge unmount cleanup.
+  if (!usersVideo.length && !isGridEnabled && !isConnected && !connectingStream) return null;
 
   const providerProps = {
     cameraDock,
