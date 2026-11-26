@@ -93,7 +93,7 @@
   # html5-dev:
   #   image: node:24@sha256:14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0
   #   working_dir: /app
-  #   # node_modules is a volume, not in the source tree
+  #   # Vite dev server on port 3000; node_modules is a volume, not in the source tree
   #   command: sh -ec 'npm ls --depth=0 >/dev/null 2>&1 || npm ci; exec npm start'
   #   volumes:
   #     - ./bigbluebutton-html5:/app
@@ -107,7 +107,8 @@
 #     content: |
 #       # as build/packages-template/bbb-html5/bbb-html5.nginx.dev
 #       location /html5client/ {
-#         proxy_pass http://html5-dev:3000/;
+#         # no trailing slash: Vite expects the /html5client/ prefix
+#         proxy_pass http://html5-dev:3000;
 #         proxy_http_version 1.1;
 #         proxy_set_header Upgrade $$http_upgrade;
 #         proxy_set_header Connection "Upgrade";
